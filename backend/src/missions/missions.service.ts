@@ -8,6 +8,7 @@ import {
 import { MissionStatus, Prisma, SubmissionStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   ListMissionsQueryDto,
   MissionListSort,
@@ -49,7 +50,10 @@ function sanitizeDraftData(data: DraftData): DraftDataInput {
 
 @Injectable()
 export class MissionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async listPublicMissions(query: ListMissionsQueryDto): Promise<unknown> {
     const normalizedStatus = query.status?.toUpperCase() as
@@ -224,7 +228,7 @@ export class MissionsService {
 
     const submission = await this.prisma.submission.findUnique({
       where: { id: submissionId },
-      select: { id: true, missionId: true, status: true },
+      select: { id: true, missionId: true, hunterAddress: true, status: true },
     });
 
     if (!submission || submission.missionId !== missionId) {
@@ -255,6 +259,17 @@ export class MissionsService {
     if (result.count !== 1) {
       throw new ConflictException(
         `Submission ${submissionId} is no longer pending`,
+      );
+    }
+
+    // Issue #314: a rejection is the decision a hunter most wants to hear
+    // about, so queue the alert here. `NotificationsService` never throws, and
+    // the review itself is already committed, so a notification problem must
+    // not turn a successful rejection into a 500.
+    if (status === SubmissionStatus.REJECTED) {
+      await this.notifications.notifySubmissionRejected(
+        missionId,
+        submission.hunterAddress,
       );
     }
 

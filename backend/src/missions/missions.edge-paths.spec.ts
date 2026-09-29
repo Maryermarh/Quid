@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { SubmissionStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { MissionsService } from './missions.service';
 
 const FOUNDER = 'GFOUNDER2222222222222222222222222222222222222222222222222';
@@ -27,6 +28,10 @@ const SUB_B = 'submission-hunter-b';
 
 describe('E2E Edge Paths – Pause / Cancel / Reject / Capacity Errors (Issue #344)', () => {
   let service: MissionsService;
+  let notifications: {
+    notifySubmissionPaid: jest.Mock;
+    notifySubmissionRejected: jest.Mock;
+  };
   let prisma: {
     mission: { findMany: jest.Mock; findUnique: jest.Mock };
     submission: {
@@ -55,7 +60,14 @@ describe('E2E Edge Paths – Pause / Cancel / Reject / Capacity Errors (Issue #3
         create: jest.fn(),
       },
     };
-    service = new MissionsService(prisma as unknown as PrismaService);
+    notifications = {
+      notifySubmissionPaid: jest.fn().mockResolvedValue(null),
+      notifySubmissionRejected: jest.fn().mockResolvedValue(null),
+    };
+    service = new MissionsService(
+      prisma as unknown as PrismaService,
+      notifications as unknown as NotificationsService,
+    );
   });
 
   // -------------------------------------------------------------------------

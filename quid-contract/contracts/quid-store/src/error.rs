@@ -21,4 +21,5 @@ pub enum QuidError {
     InsufficientAssetBalance = 16,
     FeeCollectorNotSet = 17,
     StakingPoolNotSet = 18,
+    AlreadyRejected = 19,
 }
