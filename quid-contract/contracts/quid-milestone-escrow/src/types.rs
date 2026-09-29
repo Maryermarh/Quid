@@ -57,4 +57,6 @@ pub enum DataKey {
     Program(u64),
     Milestone(u64, u64),
     ProgramCount,
+    /// Issue #293: contract admin allowed to mutate the status helpers.
+    Admin,
 }

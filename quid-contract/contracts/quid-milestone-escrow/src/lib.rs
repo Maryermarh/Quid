@@ -47,6 +47,44 @@ pub struct QuidMilestoneEscrowContract;
 
 #[contractimpl]
 impl QuidMilestoneEscrowContract {
+    // ── Admin ─────────────────────────────────────────────────────────────
+    //
+    // Issue #293: the status setters below used to be callable by anyone, so
+    // an outsider could overwrite escrow status state. They are now gated on a
+    // contract admin, stored once by `initialize` (same pattern as
+    // quid-fee-collector / quid-badge-nft).
+
+    /// Set the contract admin. Can only run once, and the admin must sign so
+    /// nobody can front-run initialisation with someone else's address.
+    pub fn initialize(env: Env, admin: Address) -> Result<(), MilestoneEscrowError> {
+        admin.require_auth();
+
+        if env.storage().instance().has(&DataKey::Admin) {
+            return Err(MilestoneEscrowError::AlreadyInitialized);
+        }
+
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        Ok(())
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, MilestoneEscrowError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(MilestoneEscrowError::NotInitialized)
+    }
+
+    /// Hand admin rights to `new_admin`. Current admin only.
+    pub fn set_admin(
+        env: Env,
+        caller: Address,
+        new_admin: Address,
+    ) -> Result<(), MilestoneEscrowError> {
+        Self::require_admin(&env, &caller)?;
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        Ok(())
+    }
+
     // ── Status helpers ────────────────────────────────────────────────────
 
     pub fn get_program_status(env: Env) -> ProgramStatus {
@@ -56,10 +94,20 @@ impl QuidMilestoneEscrowContract {
             .unwrap_or_default()
     }
 
-    pub fn set_program_status(env: Env, status: ProgramStatus) {
+    /// Admin only (issue #293). `caller` must sign and must be the stored
+    /// admin; otherwise the call fails and the stored status is unchanged.
+    /// Per-program status is not touched here: it only moves through the
+    /// sponsor/reviewer-gated create / approve / cancel flows.
+    pub fn set_program_status(
+        env: Env,
+        caller: Address,
+        status: ProgramStatus,
+    ) -> Result<(), MilestoneEscrowError> {
+        Self::require_admin(&env, &caller)?;
         env.storage()
             .instance()
             .set(&DataKey::ProgramStatus, &status);
+        Ok(())
     }
 
     pub fn get_milestone_status(env: Env) -> MilestoneStatus {
@@ -69,10 +117,17 @@ impl QuidMilestoneEscrowContract {
             .unwrap_or_default()
     }
 
-    pub fn set_milestone_status(env: Env, status: MilestoneStatus) {
+    /// Admin only (issue #293). Same rules as `set_program_status`.
+    pub fn set_milestone_status(
+        env: Env,
+        caller: Address,
+        status: MilestoneStatus,
+    ) -> Result<(), MilestoneEscrowError> {
+        Self::require_admin(&env, &caller)?;
         env.storage()
             .instance()
             .set(&DataKey::MilestoneStatus, &status);
+        Ok(())
     }
 
     pub fn get_program_count(env: Env) -> u64 {
@@ -339,6 +394,22 @@ impl QuidMilestoneEscrowContract {
             status: ProgramStatus::Cancelled,
         }
         .publish(&env);
+
+        Ok(())
+    }
+
+    // ── Internal ──────────────────────────────────────────────────────────
+
+    /// Issue #293: `caller` must authorise the invocation (`require_auth`) AND
+    /// be the stored admin. Signing alone is not enough, and neither is
+    /// passing the admin's address without the admin's signature.
+    fn require_admin(env: &Env, caller: &Address) -> Result<(), MilestoneEscrowError> {
+        caller.require_auth();
+
+        let admin = Self::get_admin(env.clone())?;
+        if *caller != admin {
+            return Err(MilestoneEscrowError::NotAuthorized);
+        }
 
         Ok(())
     }
