@@ -54,6 +54,25 @@ Open [http://localhost:3000](http://localhost:3000).
 | `NEXT_PUBLIC_FRIENDBOT_URL` | Optional Friendbot override |
 | `NEXT_PUBLIC_API_URL` | Backend base URL (when integrated) |
 
+### Reward tokens for the create-mission form
+
+`create_mission` is not wired yet. Whoever wires it needs to pass a **Stellar
+Asset Contract (SAC) address** as `reward_token` — not a `CODE:ISSUER` pair and
+not the bare issuer, or the transaction fails with `InvalidAsset`.
+
+Verified testnet values:
+
+| Asset | `reward_token` value | Funding |
+|-------|----------------------|---------|
+| XLM (native) | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` | Friendbot |
+| USDC | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` | Circle testnet faucet + trustline to `GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5` |
+
+Offer native XLM and the official Circle USDC only. Testnet is full of
+unverified lookalike `USDC` assets from other issuers. See
+[../quid-contract/README.md](../quid-contract/README.md#reward-tokens-testnet)
+for the trustline step, how to resolve other SAC ids, and how to verify an
+address on-chain before trusting it.
+
 ## Scripts
 
 ```bash
