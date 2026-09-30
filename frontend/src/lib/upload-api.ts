@@ -1,7 +1,10 @@
-import { signFreighterTransaction } from "@/lib/freighter-wallet";
 import { getApiBaseUrl } from "@/lib/api-base";
-import type { Networks } from "@stellar/stellar-sdk";
-const SESSION_KEY = "quid_hunter_auth";
+import {
+  ApiSessionExpiredError,
+  authenticate,
+  clearStoredSession,
+  getStoredSession,
+} from "@/lib/api/client";
 
 export interface FeedbackPayload {
   missionId: string | number;
@@ -30,74 +33,10 @@ export const ALLOWED_UPLOAD_MIME_TYPES = [
   "application/pdf",
 ];
 
-interface ChallengeResponse {
-  transaction: string;
-  networkPassphrase: Networks;
-}
-
-interface VerifyResponse {
-  access_token: string;
-}
-
-function readStoredSession(address: string): string | null {
-  try {
-    const stored = localStorage.getItem(`${SESSION_KEY}_${address}`);
-    if (!stored) return null;
-    const parsed = JSON.parse(stored) as { accessToken: string; expiresAt?: number };
-    return parsed.accessToken || null;
-  } catch {
-    return null;
-  }
-}
-
-function storeSession(address: string, token: string): void {
-  try {
-    localStorage.setItem(
-      `${SESSION_KEY}_${address}`,
-      JSON.stringify({ accessToken: token, timestamp: Date.now() }),
-    );
-  } catch (e) {
-    console.warn("Failed to cache auth token:", e);
-  }
-}
-
+/** Issue #324: SEP-10 session lives in lib/api/client.ts. */
 export async function authenticateHunter(address: string): Promise<string> {
-  const cached = readStoredSession(address);
-  if (cached) return cached;
-
-  const apiBase = getApiBaseUrl();
-
-  const challengeRes = await fetch(
-    `${apiBase}/auth/challenge?address=${encodeURIComponent(address)}`,
-  );
-  if (!challengeRes.ok) {
-    throw new Error(`Failed to request wallet auth challenge: ${challengeRes.statusText}`);
-  }
-
-  const challenge = (await challengeRes.json()) as ChallengeResponse;
-  const signedXdr = await signFreighterTransaction(
-    challenge.transaction,
-    address,
-    challenge.networkPassphrase,
-  );
-
-  const verifyRes = await fetch(`${apiBase}/auth/verify`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ signedXdr }),
-  });
-
-  if (!verifyRes.ok) {
-    throw new Error(`Wallet authentication verification failed: ${verifyRes.statusText}`);
-  }
-
-  const verified = (await verifyRes.json()) as VerifyResponse;
-  if (!verified.access_token) {
-    throw new Error("Auth verify response missing access token");
-  }
-
-  storeSession(address, verified.access_token);
-  return verified.access_token;
+  const session = await authenticate(address);
+  return session.accessToken;
 }
 
 export class FileValidationError extends Error {}
@@ -131,7 +70,7 @@ export function uploadFileToIpfs(
 
   return new Promise((resolve, reject) => {
     const send = async () => {
-      let token = readStoredSession(hunterAddress);
+      let token = getStoredSession(hunterAddress)?.accessToken;
       if (!token) {
         try {
           token = await authenticateHunter(hunterAddress);
@@ -157,15 +96,13 @@ export function uploadFileToIpfs(
         };
 
         xhr.onload = async () => {
-          if (xhr.status === 401 && authToken === token) {
-            // Stale/expired token: re-authenticate once and retry.
-            try {
-              const freshToken = await authenticateHunter(hunterAddress);
-              attempt(freshToken);
-            } catch (authErr) {
-              const msg = authErr instanceof Error ? authErr.message : "Authentication failed";
-              reject(new Error(`IPFS Upload Failed: ${msg}`));
-            }
+          if (xhr.status === 401) {
+            // Issue #324: an expired token clears the session; we do not
+            // silently re-open the Freighter signature prompt mid-upload.
+            clearStoredSession(hunterAddress);
+            reject(
+              new ApiSessionExpiredError(),
+            );
             return;
           }
 
@@ -214,8 +151,6 @@ export async function uploadFeedbackToIpfs(
   payload: FeedbackPayload,
 ): Promise<{ cid: string; data: UploadResponse }> {
   try {
-    let token = readStoredSession(payload.hunterAddress);
-
     const apiBase = getApiBaseUrl();
 
     const doUpload = async (authToken?: string) => {
@@ -236,12 +171,13 @@ export async function uploadFeedbackToIpfs(
       });
     };
 
-    let response = await doUpload(token ?? undefined);
+    const token = getStoredSession(payload.hunterAddress)?.accessToken;
+    const response = await doUpload(token);
 
-    // If unauthorized, re-authenticate and retry once
+    // Issue #324: a stale token clears the session; no silent re-prompt.
     if (response.status === 401) {
-      token = await authenticateHunter(payload.hunterAddress);
-      response = await doUpload(token);
+      clearStoredSession(payload.hunterAddress);
+      throw new ApiSessionExpiredError();
     }
 
     if (!response.ok) {

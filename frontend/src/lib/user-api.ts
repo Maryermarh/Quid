@@ -1,8 +1,10 @@
-import { creatorApiFetch, hasApiSession, isApiConfigured } from '@/lib/creator-api';
 import {
-  ApiUnreachableError,
-  isApiUnreachableError,
-} from '@/lib/api-network';
+  creatorApiFetch,
+  hasApiSession,
+  isApiConfigured,
+  ApiSessionExpiredError,
+} from '@/lib/creator-api';
+import { isApiUnreachableError } from '@/lib/api-network';
 import {
   fromServerRole,
   saveUserRole,
@@ -30,11 +32,21 @@ export async function fetchServerUserRole(
 ): Promise<UserRole | null> {
   if (!isApiConfigured() || !hasApiSession(address)) return null;
 
-  const response = await creatorApiFetch('/users/me', address);
-  if (!response.ok) return null;
+  try {
+    const response = await creatorApiFetch('/users/me', address);
+    if (!response.ok) return null;
 
-  const user = (await response.json()) as ServerUser;
-  return fromServerRole(user.role);
+    const user = (await response.json()) as ServerUser;
+    return fromServerRole(user.role);
+  } catch (error) {
+    // Issue #324: an expired token now clears the session instead of silently
+    // re-signing. Without a session there is no server role to read.
+    if (error instanceof ApiSessionExpiredError) {
+      console.warn('[Quid] API session expired while reading the user role.');
+      return null;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -72,6 +84,15 @@ export async function persistUserRole(
     if (isApiUnreachableError(error)) {
       console.warn(
         '[Quid] API unreachable — saving account type locally. Start the backend (npm run start:dev in backend/) or unset NEXT_PUBLIC_API_URL for frontend-only mode.',
+        error,
+      );
+      saveUserRole(role);
+      return false;
+    }
+
+    if (error instanceof ApiSessionExpiredError) {
+      console.warn(
+        '[Quid] API session expired while saving the account type — saved locally.',
         error,
       );
       saveUserRole(role);

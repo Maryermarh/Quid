@@ -1,34 +1,24 @@
-import { signFreighterTransaction } from "@/lib/freighter-wallet";
-import { getApiBaseUrl } from "@/lib/api-base";
-import { ApiUnreachableError } from "@/lib/api-network";
-import type { Networks } from "@stellar/stellar-sdk";
-
-const SESSION_KEY = "quid_creator_auth";
-
-interface CreatorSession {
-  address: string;
-  accessToken: string;
-}
-
-interface ChallengeResponse {
-  transaction: string;
-  networkPassphrase: Networks;
-}
-
-interface VerifyResponse {
-  access_token: string;
-}
-
-function getApiUrl(path: string): string {
-  const base = getApiBaseUrl();
-  return `${base}${path.startsWith("/") ? path : `/${path}`}`;
-}
+import {
+  ApiSessionExpiredError,
+  apiFetch,
+  getSession,
+  hasApiSession,
+  getStoredSession,
+  clearStoredSession,
+} from "@/lib/api/client";
 
 /**
- * Issue #331: whether an API base URL is configured at all. A local frontend
- * running without a backend still has to get through onboarding, so callers
- * use this to fall back to the localStorage-only behaviour instead of throwing.
+ * Issue #324: creator-facing API helper. The SEP-10 flow, token store and
+ * 401 handling now live in src/lib/api/client.ts; this module is a thin
+ * compatibility layer keeping the existing caller surface:
+ *   - isApiConfigured() / hasApiSession() (used by user-api and onboarding)
+ *   - creatorApiFetch(path, address, init) with lazy registration for the
+ *     first authenticated call.
  */
+
+export { hasApiSession };
+export { ApiSessionExpiredError };
+
 export function isApiConfigured(): boolean {
   // Explicit localhost URL pointing at a dead port should still allow fallback.
   if (process.env.NEXT_PUBLIC_API_URL) return true;
@@ -36,102 +26,21 @@ export function isApiConfigured(): boolean {
   return false;
 }
 
-/**
- * Issue #331: whether a SEP-10 session already exists for this address.
- *
- * Guards use it to decide whether the server role is reachable *without*
- * popping a wallet signature prompt on every dashboard mount.
- */
-export function hasApiSession(address: string): boolean {
-  if (typeof window === 'undefined') return false;
-  return readSession(address) !== null;
-}
-
-function readSession(address: string): CreatorSession | null {
-  try {
-    const stored = localStorage.getItem(SESSION_KEY);
-    if (!stored) return null;
-
-    const session = JSON.parse(stored) as Partial<CreatorSession>;
-    if (session.address !== address || !session.accessToken) {
-      localStorage.removeItem(SESSION_KEY);
-      return null;
-    }
-
-    return session as CreatorSession;
-  } catch {
-    localStorage.removeItem(SESSION_KEY);
-    return null;
-  }
-}
-
-function clearSession(): void {
-  localStorage.removeItem(SESSION_KEY);
-}
-
-async function authenticate(address: string): Promise<CreatorSession> {
-  const challengeResponse = await fetch(
-    getApiUrl(`/auth/challenge?address=${encodeURIComponent(address)}`),
-  );
-  if (challengeResponse.status === 404 || challengeResponse.status === 502 || challengeResponse.status === 503) {
-    throw new ApiUnreachableError(
-      "Backend API not found. Start the backend or unset NEXT_PUBLIC_API_URL.",
-    );
-  }
-  if (!challengeResponse.ok) {
-    throw new Error("Unable to start wallet authentication");
-  }
-
-  const challenge = (await challengeResponse.json()) as ChallengeResponse;
-  const signedXdr = await signFreighterTransaction(
-    challenge.transaction,
-    address,
-    challenge.networkPassphrase,
-  );
-
-  const verifyResponse = await fetch(getApiUrl("/auth/verify"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ signedXdr }),
-  });
-  if (!verifyResponse.ok) {
-    throw new Error("Wallet authentication failed");
-  }
-
-  const verified = (await verifyResponse.json()) as VerifyResponse;
-  if (!verified.access_token) {
-    throw new Error("Authentication response did not include an access token");
-  }
-
-  const session = { address, accessToken: verified.access_token };
-  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  return session;
-}
-
-async function getSession(address: string): Promise<CreatorSession> {
-  return readSession(address) ?? authenticate(address);
-}
-
 export async function creatorApiFetch(
   path: string,
   address: string,
   init: RequestInit = {},
 ): Promise<Response> {
-  const request = async (accessToken: string) => {
-    const headers = new Headers(init.headers);
-    headers.set("Authorization", `Bearer ${accessToken}`);
-
-    return fetch(getApiUrl(path), { ...init, headers });
-  };
-
-  let session = await getSession(address);
-  let response = await request(session.accessToken);
-
-  if (response.status === 401) {
-    clearSession();
-    session = await authenticate(address);
-    response = await request(session.accessToken);
+  // Lazy registration: the first authenticated call silently signs in so
+  // callers do not have to think about the wallet challenge.
+  if (!getStoredSession(address)) {
+    await getSession(address);
   }
 
-  return response;
+  return apiFetch(path, { address, init });
+}
+
+/** Issue #331: drop the token for a wallet without a full disconnect. */
+export function clearApiSession(address: string): void {
+  clearStoredSession(address);
 }

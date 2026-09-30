@@ -14,6 +14,13 @@ import {
   FREIGHTER_WALLET,
   getFreighterAddressIfConnected,
 } from '@/lib/freighter-wallet';
+import {
+  authenticate,
+  clearStoredSession,
+  getStoredSession,
+  onSessionChanged,
+} from '@/lib/api/client';
+import { clearUserRole } from '@/lib/onboarding';
 
 export interface Balance {
   balance: string;
@@ -28,7 +35,7 @@ export interface SupportedWallet {
   icon: string;
 }
 
-interface WalletContextState {
+export interface WalletContextState {
   connected: boolean;
   publicKey?: string;
   walletName?: string;
@@ -37,6 +44,13 @@ interface WalletContextState {
   disconnect: () => Promise<void>;
   refreshBalances: () => Promise<void>;
   getAvailableWallets: () => Promise<SupportedWallet[]>;
+  /** Issue #324: SEP-10 session JWT for the connected wallet, if any. */
+  token?: string;
+  isAuthenticated: boolean;
+  /** Issue #324: non-fatal authentication error (e.g. backend unreachable). */
+  authError?: string;
+  /** Issue #324: run challenge -> sign -> verify and store the JWT. */
+  authenticate: () => Promise<string>;
 }
 
 interface WalletProviderProps {
@@ -59,6 +73,8 @@ export function WalletProvider({
   const [publicKey, setPublicKey] = useState<string>();
   const [walletName, setWalletName] = useState<string>();
   const [balances, setBalances] = useState<Balance[]>([]);
+  const [token, setToken] = useState<string>();
+  const [authError, setAuthError] = useState<string>();
   const [server] = useState(() => new Horizon.Server(horizonUrl));
 
   const loadBalances = useCallback(
@@ -109,6 +125,21 @@ export function WalletProvider({
       persistSession(address);
       await loadBalances(address);
 
+      // Issue #324: wallet login unlocks the API. Best-effort SEP-10 sign-in:
+      // a missing backend (frontend-only mode) or a declined signature must
+      // not break wallet connection, so failures are surfaced via authError.
+      try {
+        const session = await authenticate(address);
+        setToken(session.accessToken);
+        setAuthError(undefined);
+      } catch (authErr) {
+        setAuthError(
+          authErr instanceof Error
+            ? authErr.message
+            : 'Failed to authenticate with the API',
+        );
+      }
+
       return address;
     } catch (error) {
       console.error('Failed to connect wallet:', error);
@@ -116,13 +147,30 @@ export function WalletProvider({
     }
   }, [loadBalances, persistSession]);
 
+  const authenticateApi = useCallback(async (): Promise<string> => {
+    if (!publicKey) {
+      throw new Error('Connect a wallet before authenticating with the API');
+    }
+
+    const session = await authenticate(publicKey);
+    setToken(session.accessToken);
+    setAuthError(undefined);
+    return session.accessToken;
+  }, [publicKey]);
+
   const disconnect = useCallback(async () => {
     setConnected(false);
     setPublicKey(undefined);
     setWalletName(undefined);
     setBalances([]);
+    setToken(undefined);
+    setAuthError(undefined);
     clearSession();
-  }, [clearSession]);
+    // Issue #324: a disconnect must drop the SEP-10 JWT and the cached role
+    // so a reconnect starts from a clean slate.
+    if (publicKey) clearStoredSession(publicKey);
+    clearUserRole();
+  }, [clearSession, publicKey]);
 
   const refreshBalances = useCallback(async () => {
     if (!publicKey) return;
@@ -164,6 +212,29 @@ export function WalletProvider({
     void autoReconnect();
   }, [clearSession, loadBalances]);
 
+  // Issue #324: keep the in-memory token in lock-step with the central session
+  // store. Triggers on reconnect (token already present), on a lazy sign-in
+  // elsewhere (e.g. onboarding), and on a 401 clearing the session.
+  useEffect(() => {
+    if (!publicKey) return;
+
+    const timer = window.setTimeout(
+      () => setToken(getStoredSession(publicKey)?.accessToken),
+      0,
+    );
+
+    const unsubscribe = onSessionChanged((sessionAddress, session) => {
+      if (sessionAddress === publicKey) {
+        setToken(session?.accessToken);
+      }
+    });
+
+    return () => {
+      window.clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [publicKey]);
+
   const value: WalletContextState = {
     connected,
     publicKey,
@@ -173,6 +244,10 @@ export function WalletProvider({
     disconnect,
     refreshBalances,
     getAvailableWallets,
+    token,
+    isAuthenticated: Boolean(token),
+    authError,
+    authenticate: authenticateApi,
   };
 
   return (
