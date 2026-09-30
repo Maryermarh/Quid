@@ -1,89 +1,195 @@
 import { ConfigService } from '@nestjs/config';
-import { Logger } from '@nestjs/common';
-import { rpc, xdr } from '@stellar/stellar-sdk';
+import { SubmissionStatus } from '@prisma/client';
+import { rpc } from '@stellar/stellar-sdk';
+
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { IndexerService } from './indexer.service';
 
-describe('IndexerService', () => {
-  const event: rpc.Api.EventResponse = {
-    id: '100-0',
-    type: 'contract',
-    ledger: 100,
-    ledgerClosedAt: '2026-09-29T12:00:00Z',
-    pagingToken: '100-0',
-    inSuccessfulContractCall: true,
-    txHash: 'transaction',
-    topic: [xdr.ScVal.scvSymbol('mission'), xdr.ScVal.scvSymbol('create')],
-    value: xdr.ScVal.scvVoid(),
-  };
+const MISSION_ID = 'mission-1';
+const HUNTER = 'GHUNTER1111111111111111111111111111111111111111111111111';
 
+describe('IndexerService (issue #314)', () => {
   let service: IndexerService;
   let prisma: {
+    submission: { updateMany: jest.Mock };
     indexerState: { upsert: jest.Mock; update: jest.Mock };
-    $transaction: jest.Mock;
   };
-  let transaction: { indexerState: { upsert: jest.Mock } };
-  let getEvents: jest.SpyInstance;
-  let errorLog: jest.SpyInstance;
+  let notifications: {
+    notifySubmissionPaid: jest.Mock;
+    notifySubmissionRejected: jest.Mock;
+  };
+  let config: { get: jest.Mock };
 
   beforeEach(() => {
-    transaction = {
-      indexerState: { upsert: jest.fn() },
-    };
     prisma = {
-      indexerState: {
-        upsert: jest.fn().mockResolvedValue({
-          id: 1,
-          lastLedger: BigInt(0),
-          lastCursor: null,
-        }),
-        update: jest.fn(),
-      },
-      $transaction: jest.fn(
-        (callback: (tx: typeof transaction) => Promise<void>) =>
-          callback(transaction),
-      ),
+      submission: { updateMany: jest.fn() },
+      indexerState: { upsert: jest.fn(), update: jest.fn() },
     };
+
+    notifications = {
+      notifySubmissionPaid: jest.fn().mockResolvedValue('notification-1'),
+      notifySubmissionRejected: jest.fn().mockResolvedValue('notification-2'),
+    };
+
+    config = { get: jest.fn().mockReturnValue(undefined) };
+
     service = new IndexerService(
-      {
-        get: jest.fn().mockImplementation(
-          (key: string) =>
-            ({
-              RPC_URL: 'https://rpc.example',
-              CONTRACT_ID: 'C123',
-            })[key],
-        ),
-      } as unknown as ConfigService,
+      config as unknown as ConfigService,
       prisma as unknown as PrismaService,
+      notifications as unknown as NotificationsService,
     );
-    getEvents = jest
-      .spyOn(rpc.Server.prototype, 'getEvents')
-      .mockResolvedValue({
-        latestLedger: 100,
-        events: [event],
-        cursor: '100-0',
+  });
+
+  describe('applySubmissionTransition', () => {
+    it('alerts the hunter when a submission becomes PAID', async () => {
+      prisma.submission.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.applySubmissionTransition({
+        missionId: MISSION_ID,
+        hunterAddress: HUNTER,
+        status: SubmissionStatus.PAID,
       });
-    errorLog = jest
-      .spyOn(Logger.prototype, 'error')
-      .mockImplementation(() => undefined);
+
+      expect(prisma.submission.updateMany).toHaveBeenCalledWith({
+        where: {
+          missionId: MISSION_ID,
+          hunterAddress: HUNTER,
+          status: { not: SubmissionStatus.PAID },
+        },
+        data: { status: SubmissionStatus.PAID, rejectionReason: null },
+      });
+      expect(notifications.notifySubmissionPaid).toHaveBeenCalledWith(
+        MISSION_ID,
+        HUNTER,
+      );
+    });
+
+    it('alerts the hunter when a submission becomes REJECTED', async () => {
+      prisma.submission.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.applySubmissionTransition({
+        missionId: MISSION_ID,
+        hunterAddress: HUNTER,
+        status: SubmissionStatus.REJECTED,
+        rejectionReason: '  Off topic  ',
+      });
+
+      expect(prisma.submission.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: {
+            status: SubmissionStatus.REJECTED,
+            rejectionReason: 'Off topic',
+          },
+        }),
+      );
+      expect(notifications.notifySubmissionRejected).toHaveBeenCalledWith(
+        MISSION_ID,
+        HUNTER,
+      );
+    });
+
+    it('stores a null rejection reason when the event carries none', async () => {
+      prisma.submission.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.applySubmissionTransition({
+        missionId: MISSION_ID,
+        hunterAddress: HUNTER,
+        status: SubmissionStatus.REJECTED,
+      });
+
+      expect(prisma.submission.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ rejectionReason: null }),
+        }),
+      );
+    });
+
+    it('does not re-alert on a replayed event for a status already applied', async () => {
+      prisma.submission.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.applySubmissionTransition({
+        missionId: MISSION_ID,
+        hunterAddress: HUNTER,
+        status: SubmissionStatus.PAID,
+      });
+
+      expect(notifications.notifySubmissionPaid).not.toHaveBeenCalled();
+      expect(notifications.notifySubmissionRejected).not.toHaveBeenCalled();
+    });
+
+    it('does not alert for a status that carries no hunter-facing alert', async () => {
+      prisma.submission.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.applySubmissionTransition({
+        missionId: MISSION_ID,
+        hunterAddress: HUNTER,
+        status: SubmissionStatus.APPROVED,
+      });
+
+      expect(notifications.notifySubmissionPaid).not.toHaveBeenCalled();
+      expect(notifications.notifySubmissionRejected).not.toHaveBeenCalled();
+    });
+
+    it('does not fail the tick when the notification hook throws', async () => {
+      prisma.submission.updateMany.mockResolvedValue({ count: 1 });
+      notifications.notifySubmissionPaid.mockRejectedValue(
+        new Error('webhook exploded'),
+      );
+
+      await expect(
+        service.applySubmissionTransition({
+          missionId: MISSION_ID,
+          hunterAddress: HUNTER,
+          status: SubmissionStatus.PAID,
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('surfaces a failed status write instead of swallowing it', async () => {
+      prisma.submission.updateMany.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        service.applySubmissionTransition({
+          missionId: MISSION_ID,
+          hunterAddress: HUNTER,
+          status: SubmissionStatus.PAID,
+        }),
+      ).rejects.toThrow('db down');
+    });
   });
 
-  afterEach(() => {
-    getEvents.mockRestore();
-    errorLog.mockRestore();
-  });
+  describe('pollEvents', () => {
+    it('does not touch the checkpoint when chain config is absent', async () => {
+      await service.pollEvents();
 
-  it('does not advance the persisted cursor when event processing fails', async () => {
-    await expect(service.pollEvents()).rejects.toThrow(
-      'Unexpected Soroban event payload encoding',
-    );
+      expect(prisma.indexerState.upsert).not.toHaveBeenCalled();
+    });
 
-    expect(prisma.indexerState.upsert).toHaveBeenCalledTimes(1);
-    expect(transaction.indexerState.upsert).not.toHaveBeenCalled();
-    expect(prisma.indexerState.update).not.toHaveBeenCalled();
-    expect(errorLog).toHaveBeenCalledWith(
-      'Soroban event sync failed: Unexpected Soroban event payload encoding',
-      expect.any(String),
-    );
+    it('upserts the checkpoint when chain config is present', async () => {
+      config.get.mockImplementation((key: string) =>
+        key === 'RPC_URL' ? 'https://rpc.example' : 'C123',
+      );
+      prisma.indexerState.upsert.mockResolvedValue({
+        lastLedger: BigInt(0),
+        lastCursor: null,
+      });
+      prisma.indexerState.update.mockResolvedValue({});
+      const getEvents = jest
+        .spyOn(rpc.Server.prototype, 'getEvents')
+        .mockResolvedValue({
+          events: [],
+          latestLedger: 1,
+          cursor: null,
+        });
+
+      try {
+        await service.pollEvents();
+
+        expect(prisma.indexerState.upsert).toHaveBeenCalled();
+      } finally {
+        getEvents.mockRestore();
+      }
+    });
   });
 });

@@ -1,9 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { ConfigService } from '@nestjs/config';
 import { MissionStatus, Prisma, SubmissionStatus } from '@prisma/client';
 import { rpc, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
+
+export interface SubmissionStatusTransition {
+  missionId: string;
+  hunterAddress: string;
+  status: SubmissionStatus;
+  rejectionReason?: string | null;
+}
 
 const PAGE_SIZE = 100;
 const MAX_PAGES_PER_TICK = 10;
@@ -18,6 +26,7 @@ export class IndexerService {
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   @Cron(CronExpression.EVERY_10_SECONDS)
@@ -417,5 +426,70 @@ export class IndexerService {
       throw new Error(`Unsafe ledger value ${ledger.toString()}`);
     }
     return value;
+  }
+
+  /**
+   * Issue #314: persist a submission status transition seen on-chain and alert
+   * the hunter.
+   *
+   * The status write is the indexer's job and a failure there is a real error
+   * worth surfacing. The alert is best-effort: `NotificationsService` swallows
+   * and logs its own errors, and the extra guard here means a notification bug
+   * can never fail the surrounding indexer tick.
+   *
+   * The `status: { not: status }` guard is what makes this safe to call for
+   * every event in a ledger range: re-reading a status we already applied (a
+   * reorg, a second RPC source, a replayed cursor) matches no rows and so does
+   * not re-alert the hunter.
+   */
+  async applySubmissionTransition(
+    transition: SubmissionStatusTransition,
+  ): Promise<void> {
+    const { missionId, hunterAddress, status } = transition;
+
+    const result = await this.prisma.submission.updateMany({
+      where: { missionId, hunterAddress, status: { not: status } },
+      data: {
+        status,
+        rejectionReason:
+          status === SubmissionStatus.REJECTED
+            ? transition.rejectionReason?.trim() || null
+            : null,
+      },
+    });
+
+    if (result.count === 0) {
+      this.logger.debug(
+        `No submission for mission ${missionId} and hunter ${hunterAddress} moved to ${status}; either it is not indexed yet or it is already ${status}.`,
+      );
+      return;
+    }
+
+    if (status === SubmissionStatus.PAID) {
+      await this.safeNotify(() =>
+        this.notifications.notifySubmissionPaid(missionId, hunterAddress),
+      );
+      return;
+    }
+
+    if (status === SubmissionStatus.REJECTED) {
+      await this.safeNotify(() =>
+        this.notifications.notifySubmissionRejected(missionId, hunterAddress),
+      );
+    }
+  }
+
+  private async safeNotify(
+    notify: () => Promise<string | null>,
+  ): Promise<void> {
+    try {
+      await notify();
+    } catch (error) {
+      this.logger.error(
+        `Notification hook failed without stopping the indexer: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 }

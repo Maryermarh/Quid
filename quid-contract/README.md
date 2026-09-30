@@ -17,6 +17,78 @@ Soroban (Rust) smart contracts for Quid: bounty escrow, reputation, milestone pr
 | `quid-moderation-registry` | `quid_moderation_registry.wasm` | Shared ban/mute lists read by store gates (`submit_feedback`) |
 | `hello-world` | `hello_world.wasm` | Scaffold only — safe to ignore |
 
+## Reward tokens (testnet)
+
+`create_mission` takes a `reward_token` that must be the **Stellar Asset Contract
+(SAC) address** of the asset — not the classic `CODE:ISSUER` pair and not the
+issuer address on its own. Passing an issuer or a classic asset makes mission
+creation fail on-chain with `InvalidAsset`.
+
+Use these verified values on **testnet** (`Test SDF Network ; September 2015`):
+
+| Asset | Classic code:issuer | SAC contract id (`reward_token`) | How to get testnet funds |
+|-------|--------------------|------------------------------------|---------------------------|
+| XLM (native) | `native` | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` | Friendbot funds testnet accounts with XLM |
+| USDC | `USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5` | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` | Circle testnet faucet — see below |
+
+The USDC row is the **official Circle-issued** testnet asset. Testnet hosts
+thousands of lookalike `USDC` assets from unverified issuers; using one of those
+will deploy fine and then fail to settle. Always confirm the issuer ends in
+`FLA5`.
+
+### Getting testnet USDC
+
+Friendbot only creates accounts with a native XLM balance, so USDC has to come
+from a faucet. Ask for testnet USDC from the
+[Circle testnet faucet](https://faucet.circle.com/), or from a community faucet,
+then establish a trustline to the issuer:
+
+```bash
+stellar contract invoke \
+  --id CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA \
+  --source alice \
+  --network testnet \
+  --send=yes \
+  -- \
+  changeTrusted \
+  --issuer GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5 \
+  --tlimit 100000
+```
+
+### Native XLM vs SAC wrapping
+
+- **`native` is always available and needs no trustline.** It is the only asset
+  Friendbot funds directly, so use it for local testing and CI.
+- **Any other asset must be passed as its SAC contract id.** Contracts move
+  value through SACs, so `reward_token` for USDC is the `CBIELT...` contract,
+  not `USDC` and not the `GBBD47...` issuer.
+- To resolve a SAC id yourself for an asset on either network:
+
+  ```bash
+  # for a classic asset
+  stellar contract id asset --asset "USDC:GBBD47..." --network testnet
+  # for native XLM
+  stellar contract id asset --asset native --network testnet
+  ```
+
+### Verifying an address before you use it
+
+Any SAC id can be checked against the chain, which is the fastest way to catch a
+typo or a scam asset:
+
+```bash
+stellar contract invoke \
+  --id <SAC_CONTRACT_ID> \
+  --source alice \
+  --network testnet \
+  --send=no \
+  -- \
+  name
+```
+
+A correct USDC SAC prints `"USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"`
+and the native SAC prints `"native"`.
+
 ## Prerequisites
 
 - Rust (stable)
@@ -48,6 +120,49 @@ target/wasm32v1-none/release/quid_badge_nft.wasm
 target/wasm32v1-none/release/quid_fee_collector.wasm
 target/wasm32v1-none/release/quid_mission_factory.wasm
 ```
+
+## Deployed on testnet
+
+These are real, verified deployments on `Test SDF Network ; September 2015`.
+Copy the ids into `frontend/.env.example` to point a local frontend at them.
+
+| Contract | Testnet contract id | State |
+|----------|---------------------|-------|
+| `quid-reputation` | `CDXKNUE2ZNZRZLJI5BK6M2KBMLXLAY4ITWTZG6G3BZP2O2AMQKHRCEWC` | Deployed and initialized; `get_admin` verified |
+
+`quid-reputation` was initialized with the deploying account as the initial
+admin. The admin secret is a throwaway Friendbot identity — **do not use this
+contract for anything that needs a trusted admin.** Redeploy with your own
+identity for real use:
+
+```bash
+# redeploy under your own identity
+stellar contract deploy \
+  --wasm target/wasm32v1-none/release/quid_reputation.wasm \
+  --source alice \
+  --network testnet
+
+# then set the admin to your account
+stellar contract invoke \
+  --id <YOUR_REPUTATION_CONTRACT_ID> \
+  --source alice \
+  --network testnet \
+  -- \
+  initialize \
+  --admin <ALICE_PUBLIC_KEY>
+
+# confirm
+stellar contract invoke \
+  --id <YOUR_REPUTATION_CONTRACT_ID> \
+  --source alice \
+  --network testnet \
+  --send=no \
+  -- \
+  get_admin
+```
+
+The other contracts in this workspace have not been deployed to testnet yet;
+use the `## Deploy (testnet)` steps below.
 
 ## Deploy (testnet)
 

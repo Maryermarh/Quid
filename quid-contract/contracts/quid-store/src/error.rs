@@ -25,4 +25,5 @@ pub enum QuidError {
     HunterBanned = 19,
     /// No moderation registry has been configured.
     ModerationRegistryNotSet = 20,
+    AlreadyRejected = 21,
 }

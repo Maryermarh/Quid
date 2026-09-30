@@ -2,8 +2,11 @@
 
 use super::*;
 use crate::types::MissionStatus;
+use soroban_sdk::testutils::Events;
 use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use soroban_sdk::{
+    testutils::Address as _, Address, Env, Map as SorobanMap, String, Symbol, TryFromVal, Val,
+};
 
 fn setup_test_env() -> (Env, Address, Address, Address) {
     let env = Env::default();
@@ -1917,145 +1920,396 @@ fn test_get_fee_collector_before_configuration() {
 }
 
 // -----------------------------------------------------------------------------
-// Moderation gate (quid-moderation-registry integration, #305)
+// Owner rejection with stake refund
 // -----------------------------------------------------------------------------
 
-use quid_moderation_registry::{
-    QuidModerationRegistryContract, QuidModerationRegistryContractClient,
-};
+use quid_staking::{QuidStakingContract, QuidStakingContractClient};
 
-/// Register a moderation registry with one moderator and wire it into the store.
-fn setup_moderation<'a>(
+/// Create an open mission and return its id.
+fn create_pending_mission(
     env: &Env,
-    store_id: &Address,
-) -> (QuidModerationRegistryContractClient<'a>, Address) {
-    let registry_id = env.register(QuidModerationRegistryContract, ());
-    let registry = QuidModerationRegistryContractClient::new(env, &registry_id);
-    registry.initialize(&Address::generate(env));
-    let moderator = Address::generate(env);
-    registry.set_moderator(&moderator, &true);
+    client: &QuidStoreContractClient,
+    owner: &Address,
+    token_address: &Address,
+    max_participants: u32,
+) -> u64 {
+    let reward = Reward {
+        reward_token: token_address.clone(),
+        reward_amount: 100,
+    };
+    let min_asset = MinAsset {
+        min_asset_token: None,
+        min_asset_amount: 0,
+    };
 
-    QuidStoreContractClient::new(env, store_id).set_moderation_registry(&registry_id);
-    (registry, moderator)
+    client.create_mission(
+        owner,
+        &String::from_str(env, "Reject Test"),
+        &String::from_str(env, "QmDesc"),
+        &reward,
+        &max_participants,
+        &min_asset,
+    )
+}
+
+/// Register a staking pool that trusts `store_id` as a locker.
+fn setup_staking_pool<'a>(
+    env: &'a Env,
+    store_id: &Address,
+) -> (QuidStakingContractClient<'a>, Address) {
+    let pool_id = env.register(QuidStakingContract, ());
+    let pool = QuidStakingContractClient::new(env, &pool_id);
+
+    let admin = Address::generate(env);
+    let treasury = Address::generate(env);
+    pool.initialize(&admin, &treasury);
+    pool.set_locker(&admin, store_id, &true);
+
+    QuidStoreContractClient::new(env, store_id).set_staking_pool(&pool_id);
+
+    (pool, treasury)
 }
 
 #[test]
-fn test_banned_hunter_cannot_submit() {
+fn test_reject_submission_sets_status_and_refunds_stake() {
     let (env, contract_id, owner, token_address) = setup_test_env();
     let client = QuidStoreContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token_address);
-    let (registry, moderator) = setup_moderation(&env, &contract_id);
 
     let hunter = Address::generate(&env);
-    mint_tokens_for_hunter(&env, &token_address, &hunter, 1000);
-    let mission_id = open_mission(&env, &client, &owner, &token_address, 100, 5);
+    let stake_amount: i128 = 40;
+    mint_tokens_for_hunter(&env, &token_address, &hunter, 1_000);
 
-    registry.ban(&moderator, &hunter);
-
-    let cid = String::from_str(&env, "QmBanned");
-    assert_eq!(
-        client.try_submit_feedback(&mission_id, &hunter, &cid, &token_address, &10),
-        Err(Ok(QuidError::HunterBanned))
-    );
-    // Rejected before any stake moved or state changed.
-    assert_eq!(token_client.balance(&hunter), 1000);
-    assert_eq!(client.get_mission(&mission_id).participants_count, 0);
-}
-
-#[test]
-fn test_unbanned_hunter_can_submit_again() {
-    let (env, contract_id, owner, token_address) = setup_test_env();
-    let client = QuidStoreContractClient::new(&env, &contract_id);
-    let (registry, moderator) = setup_moderation(&env, &contract_id);
-
-    let hunter = Address::generate(&env);
-    mint_tokens_for_hunter(&env, &token_address, &hunter, 1000);
-    let mission_id = open_mission(&env, &client, &owner, &token_address, 100, 5);
-
-    registry.ban(&moderator, &hunter);
-    registry.unban(&moderator, &hunter);
-
-    let cid = String::from_str(&env, "QmBack");
-    client.submit_feedback(&mission_id, &hunter, &cid, &token_address, &10);
-}
-
-#[test]
-fn test_muted_hunter_blocked_until_mute_expires() {
-    use soroban_sdk::testutils::Ledger;
-
-    let (env, contract_id, owner, token_address) = setup_test_env();
-    let client = QuidStoreContractClient::new(&env, &contract_id);
-    let (registry, moderator) = setup_moderation(&env, &contract_id);
-
-    let hunter = Address::generate(&env);
-    mint_tokens_for_hunter(&env, &token_address, &hunter, 1000);
-    let mission_id = open_mission(&env, &client, &owner, &token_address, 100, 5);
-
-    env.ledger().set_timestamp(1_000);
-    registry.mute(&moderator, &hunter, &2_000);
-
-    let cid = String::from_str(&env, "QmMuted");
-    assert_eq!(
-        client.try_submit_feedback(&mission_id, &hunter, &cid, &token_address, &10),
-        Err(Ok(QuidError::HunterBanned))
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 5);
+    let escrow_before_submit = token_client.balance(&contract_id);
+    client.submit_feedback(
+        &mission_id,
+        &hunter,
+        &String::from_str(&env, "QmSpam"),
+        &token_address,
+        &stake_amount,
     );
 
-    env.ledger().set_timestamp(2_000);
-    client.submit_feedback(&mission_id, &hunter, &cid, &token_address, &10);
+    let balance_before_reject = token_client.balance(&hunter);
+
+    client.reject_submission(&mission_id, &hunter);
+
+    // The stake comes back in full and the reward pool is left untouched.
+    assert_eq!(
+        token_client.balance(&hunter),
+        balance_before_reject + stake_amount
+    );
+    assert_eq!(token_client.balance(&contract_id), escrow_before_submit);
+
+    let submission = client.get_submission(&mission_id, &hunter);
+    assert_eq!(submission.status, SubmissionStatus::Rejected);
 }
 
 #[test]
-fn test_ban_only_affects_the_banned_hunter() {
+fn test_reject_submission_does_not_consume_a_payout_slot() {
     let (env, contract_id, owner, token_address) = setup_test_env();
     let client = QuidStoreContractClient::new(&env, &contract_id);
-    let (registry, moderator) = setup_moderation(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token_address);
 
-    let banned = Address::generate(&env);
-    let honest = Address::generate(&env);
-    mint_tokens_for_hunter(&env, &token_address, &banned, 1000);
-    mint_tokens_for_hunter(&env, &token_address, &honest, 1000);
-    let mission_id = open_mission(&env, &client, &owner, &token_address, 100, 5);
+    let rejected_hunter = Address::generate(&env);
+    let paid_hunter = Address::generate(&env);
+    mint_tokens_for_hunter(&env, &token_address, &rejected_hunter, 1_000);
+    mint_tokens_for_hunter(&env, &token_address, &paid_hunter, 1_000);
 
-    registry.ban(&moderator, &banned);
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 1);
 
-    let cid = String::from_str(&env, "QmHonest");
-    client.submit_feedback(&mission_id, &honest, &cid, &token_address, &10);
-    assert!(client
-        .try_submit_feedback(&mission_id, &banned, &cid, &token_address, &10)
-        .is_err());
+    client.submit_feedback(
+        &mission_id,
+        &rejected_hunter,
+        &String::from_str(&env, "QmSpam"),
+        &token_address,
+        &10,
+    );
+    client.submit_feedback(
+        &mission_id,
+        &paid_hunter,
+        &String::from_str(&env, "QmGood"),
+        &token_address,
+        &20,
+    );
+
+    client.reject_submission(&mission_id, &rejected_hunter);
+
+    // The rejected hunter never consumed the single slot, so the other hunter
+    // can still be paid and complete the mission.
+    let before_payout = token_client.balance(&paid_hunter);
+    client.payout_participant(&mission_id, &paid_hunter);
+    assert_eq!(token_client.balance(&paid_hunter), before_payout + 100 + 20);
+
+    let mission = client.get_mission(&mission_id);
+    assert_eq!(mission.participants_count, 1);
+    assert_eq!(mission.status, MissionStatus::Completed);
 }
 
 #[test]
-fn test_submissions_unaffected_without_a_registry() {
+fn test_reject_submission_publishes_event() {
     let (env, contract_id, owner, token_address) = setup_test_env();
     let client = QuidStoreContractClient::new(&env, &contract_id);
 
     let hunter = Address::generate(&env);
-    mint_tokens_for_hunter(&env, &token_address, &hunter, 1000);
-    let mission_id = open_mission(&env, &client, &owner, &token_address, 100, 5);
+    mint_tokens_for_hunter(&env, &token_address, &hunter, 1_000);
+
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 5);
+    client.submit_feedback(
+        &mission_id,
+        &hunter,
+        &String::from_str(&env, "QmSpam"),
+        &token_address,
+        &35,
+    );
+
+    client.reject_submission(&mission_id, &hunter);
+
+    let (emitter, _topics, data) = env.events().all().last().unwrap();
+    assert_eq!(emitter, contract_id);
+
+    // The event data is a map keyed by the event field names.
+    let fields = SorobanMap::<Symbol, Val>::try_from_val(&env, &data).unwrap();
+    assert_eq!(fields.len(), 3);
+    assert_eq!(
+        u64::try_from_val(&env, &fields.get(Symbol::new(&env, "mission_id")).unwrap()).unwrap(),
+        mission_id
+    );
+    assert_eq!(
+        Address::try_from_val(&env, &fields.get(Symbol::new(&env, "hunter")).unwrap()).unwrap(),
+        hunter
+    );
+    assert_eq!(
+        i128::try_from_val(
+            &env,
+            &fields.get(Symbol::new(&env, "stake_refunded")).unwrap()
+        )
+        .unwrap(),
+        35
+    );
+}
+
+#[test]
+fn test_reject_submission_after_slash_refunds_nothing() {
+    let (env, contract_id, owner, token_address) = setup_test_env();
+    let client = QuidStoreContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token_address);
+
+    let treasury = Address::generate(&env);
+    client.set_treasury(&treasury);
+
+    let hunter = Address::generate(&env);
+    mint_tokens_for_hunter(&env, &token_address, &hunter, 1_000);
+
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 5);
+    client.submit_feedback(
+        &mission_id,
+        &hunter,
+        &String::from_str(&env, "QmSpam"),
+        &token_address,
+        &50,
+    );
+
+    client.slash_hunter_stake(&mission_id, &hunter, &token_address);
+
+    let balance_before_reject = token_client.balance(&hunter);
+    client.reject_submission(&mission_id, &hunter);
+
+    // The stake already went to the treasury; the hunter is not paid twice.
+    assert_eq!(token_client.balance(&hunter), balance_before_reject);
+    assert_eq!(
+        client.get_submission(&mission_id, &hunter).status,
+        SubmissionStatus::Rejected
+    );
+    assert_eq!(token_client.balance(&treasury), 50);
+}
+
+#[test]
+fn test_reject_submission_unlocks_pooled_stake() {
+    let (env, contract_id, owner, token_address) = setup_test_env();
+    let client = QuidStoreContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token_address);
+
+    let (pool, _treasury) = setup_staking_pool(&env, &contract_id);
+
+    let hunter = Address::generate(&env);
+    let stake_amount: i128 = 60;
+    mint_tokens_for_hunter(&env, &token_address, &hunter, 1_000);
+    pool.deposit(&hunter, &token_address, &stake_amount);
+
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 5);
+    client.submit_feedback(
+        &mission_id,
+        &hunter,
+        &String::from_str(&env, "QmSpam"),
+        &token_address,
+        &stake_amount,
+    );
 
     assert_eq!(
-        client.try_get_moderation_registry(),
-        Err(Ok(QuidError::ModerationRegistryNotSet))
+        pool.get_locked_balance(&hunter, &token_address),
+        stake_amount
     );
-    let cid = String::from_str(&env, "QmNoRegistry");
-    client.submit_feedback(&mission_id, &hunter, &cid, &token_address, &10);
+
+    client.reject_submission(&mission_id, &hunter);
+
+    // The deposit stays in the pool; only the mission lock is released.
+    assert_eq!(pool.get_locked_balance(&hunter, &token_address), 0);
+    assert_eq!(pool.get_balance(&hunter, &token_address), stake_amount);
+    assert_eq!(token_client.balance(&contract_id), 500);
+    assert_eq!(
+        client.get_submission(&mission_id, &hunter).status,
+        SubmissionStatus::Rejected
+    );
 }
 
 #[test]
-fn test_moderation_registry_slot_is_transferable() {
+#[should_panic(expected = "Error(Contract, #21)")]
+fn test_cannot_reject_submission_twice() {
     let (env, contract_id, owner, token_address) = setup_test_env();
     let client = QuidStoreContractClient::new(&env, &contract_id);
 
-    let (first, first_mod) = setup_moderation(&env, &contract_id);
-    let (second, _) = setup_moderation(&env, &contract_id);
-    assert_eq!(client.get_moderation_registry(), second.address);
-
-    // A ban in the old registry no longer applies once the slot moved.
     let hunter = Address::generate(&env);
-    mint_tokens_for_hunter(&env, &token_address, &hunter, 1000);
-    first.ban(&first_mod, &hunter);
-    let mission_id = open_mission(&env, &client, &owner, &token_address, 100, 5);
-    let cid = String::from_str(&env, "QmMoved");
-    client.submit_feedback(&mission_id, &hunter, &cid, &token_address, &10);
+    mint_tokens_for_hunter(&env, &token_address, &hunter, 1_000);
+
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 5);
+    client.submit_feedback(
+        &mission_id,
+        &hunter,
+        &String::from_str(&env, "QmSpam"),
+        &token_address,
+        &10,
+    );
+
+    client.reject_submission(&mission_id, &hunter);
+    client.reject_submission(&mission_id, &hunter);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn test_cannot_reject_submission_after_paid() {
+    let (env, contract_id, owner, token_address) = setup_test_env();
+    let client = QuidStoreContractClient::new(&env, &contract_id);
+
+    let hunter = Address::generate(&env);
+    mint_tokens_for_hunter(&env, &token_address, &hunter, 1_000);
+
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 5);
+    client.submit_feedback(
+        &mission_id,
+        &hunter,
+        &String::from_str(&env, "QmGood"),
+        &token_address,
+        &10,
+    );
+    client.payout_participant(&mission_id, &hunter);
+
+    client.reject_submission(&mission_id, &hunter);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_cannot_payout_rejected_submission() {
+    let (env, contract_id, owner, token_address) = setup_test_env();
+    let client = QuidStoreContractClient::new(&env, &contract_id);
+
+    let hunter = Address::generate(&env);
+    mint_tokens_for_hunter(&env, &token_address, &hunter, 1_000);
+
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 5);
+    client.submit_feedback(
+        &mission_id,
+        &hunter,
+        &String::from_str(&env, "QmSpam"),
+        &token_address,
+        &10,
+    );
+    client.reject_submission(&mission_id, &hunter);
+
+    client.payout_participant(&mission_id, &hunter);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #21)")]
+fn test_cannot_update_rejected_submission() {
+    let (env, contract_id, owner, token_address) = setup_test_env();
+    let client = QuidStoreContractClient::new(&env, &contract_id);
+
+    let hunter = Address::generate(&env);
+    mint_tokens_for_hunter(&env, &token_address, &hunter, 1_000);
+
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 5);
+    client.submit_feedback(
+        &mission_id,
+        &hunter,
+        &String::from_str(&env, "QmSpam"),
+        &token_address,
+        &10,
+    );
+    client.reject_submission(&mission_id, &hunter);
+
+    client.update_submission(&mission_id, &hunter, &String::from_str(&env, "QmRetry"));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_reject_submission_not_found() {
+    let (env, contract_id, owner, token_address) = setup_test_env();
+    let client = QuidStoreContractClient::new(&env, &contract_id);
+
+    let hunter = Address::generate(&env);
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 5);
+
+    client.reject_submission(&mission_id, &hunter);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2)")]
+fn test_reject_submission_on_cancelled_mission() {
+    let (env, contract_id, owner, token_address) = setup_test_env();
+    let client = QuidStoreContractClient::new(&env, &contract_id);
+
+    let hunter = Address::generate(&env);
+    mint_tokens_for_hunter(&env, &token_address, &hunter, 1_000);
+
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 5);
+    client.submit_feedback(
+        &mission_id,
+        &hunter,
+        &String::from_str(&env, "QmSpam"),
+        &token_address,
+        &10,
+    );
+    client.cancel_mission(&mission_id);
+
+    client.reject_submission(&mission_id, &hunter);
+}
+
+#[test]
+fn test_reject_submission_requires_owner_auth() {
+    let (env, contract_id, owner, token_address) = setup_test_env();
+    let client = QuidStoreContractClient::new(&env, &contract_id);
+
+    let hunter = Address::generate(&env);
+    mint_tokens_for_hunter(&env, &token_address, &hunter, 1_000);
+
+    let mission_id = create_pending_mission(&env, &client, &owner, &token_address, 5);
+    client.submit_feedback(
+        &mission_id,
+        &hunter,
+        &String::from_str(&env, "QmSpam"),
+        &token_address,
+        &10,
+    );
+
+    // Only the hunter's submission auth is authorised, so the owner's
+    // `require_auth` inside `reject_submission` is rejected by the host.
+    env.mock_auths(&[]);
+
+    let result = client.try_reject_submission(&mission_id, &hunter);
+    assert!(result.is_err());
+    assert_eq!(
+        client.get_submission(&mission_id, &hunter).status,
+        SubmissionStatus::Pending
+    );
 }

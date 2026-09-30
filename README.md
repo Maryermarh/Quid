@@ -190,6 +190,28 @@ To interact with real on-chain contracts on Stellar Testnet:
 
 *(For local testing without deploying contracts, you can use the placeholder IDs provided in `frontend/.env.example`.)*
 
+#### Reward tokens to use on testnet
+
+When you create a mission, `reward_token` must be a **Stellar Asset Contract (SAC)
+address**, not a classic `CODE:ISSUER` pair. Use these verified testnet values:
+
+| Asset | SAC contract id (`reward_token`) | How to get testnet funds |
+|-------|------------------------------------|---------------------------|
+| XLM (native) | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` | Friendbot — `stellar keys fund <ADDRESS> --network testnet` |
+| USDC | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` | [Circle testnet faucet](https://faucet.circle.com/), then add a trustline to issuer `GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5` |
+
+Notes:
+
+- **Native XLM is the easy path for local testing** — Friendbot funds it directly
+  and it needs no trustline.
+- **USDC must be the official Circle testnet asset** (issuer ending `FLA5`).
+  Testnet is full of unverified lookalike `USDC` assets that deploy fine and
+  then fail to settle.
+- To check any SAC id before using it, call `name` on it and confirm it returns
+  the asset you expect. See
+  [`quid-contract/README.md`](quid-contract/README.md#reward-tokens-testnet) for
+  the full table, the trustline step, and how to resolve other SAC ids.
+
 ---
 
 ### 5. Freighter Wallet Setup
