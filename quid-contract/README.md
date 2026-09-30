@@ -199,7 +199,8 @@ See [contracts/quid-referral/README.md](./contracts/quid-referral/README.md).
 ### `quid-milestone-escrow`
 
 - `create_program` / `add_milestone` / `approve_milestone` / `cancel_program`
-- getters for program / milestone status
+- `initialize` / `get_admin` / `set_admin`
+- getters for program / milestone status; `set_program_status` / `set_milestone_status` are admin only
 
 ### `quid-dispute`
 
@@ -257,7 +258,6 @@ cargo test -p quid-mission-factory
 - Store → reputation hook on successful payout (also wires `quid-referral.record_payout`)
 - Store/reputation → `quid-badge-nft` `mint_badge` call on successful payout
   (the badge contract already exposes the minter allow-list for it)
-- Align milestone status helpers with production auth rules
 - Wire `quid-dispute` into store reject / payout holds
 - Remove or archive `hello-world`
 

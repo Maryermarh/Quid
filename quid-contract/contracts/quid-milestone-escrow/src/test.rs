@@ -1,11 +1,12 @@
 #![cfg(test)]
 
 use super::*;
+use crate::error::MilestoneEscrowError;
 use crate::types::{MilestoneStatus, ProgramStatus};
 use soroban_sdk::{
-    testutils::{Address as _, Events},
+    testutils::{Address as _, Events, MockAuth, MockAuthInvoke},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env, String,
+    Address, Env, IntoVal, String,
 };
 
 fn setup_test_env() -> (Env, Address, Address, Address, Address) {
@@ -37,14 +38,164 @@ fn test_default_statuses() {
 #[test]
 fn test_status_storage_roundtrip() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(QuidMilestoneEscrowContract, ());
     let client = QuidMilestoneEscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
 
-    client.set_program_status(&ProgramStatus::Completed);
-    client.set_milestone_status(&MilestoneStatus::Paid);
+    client.set_program_status(&admin, &ProgramStatus::Completed);
+    client.set_milestone_status(&admin, &MilestoneStatus::Paid);
 
     assert_eq!(client.get_program_status(), ProgramStatus::Completed);
     assert_eq!(client.get_milestone_status(), MilestoneStatus::Paid);
+}
+
+// ── Issue #293: status setter auth ──────────────────────────────────────────
+
+fn setup_admin() -> (Env, QuidMilestoneEscrowContractClient<'static>, Address) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(QuidMilestoneEscrowContract, ());
+    let client = QuidMilestoneEscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    (env, client, admin)
+}
+
+#[test]
+fn test_initialize_sets_admin_once() {
+    let (env, client, admin) = setup_admin();
+    assert_eq!(client.get_admin(), admin);
+
+    let other = Address::generate(&env);
+    assert_eq!(
+        client.try_initialize(&other),
+        Err(Ok(MilestoneEscrowError::AlreadyInitialized))
+    );
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_status_setters_fail_before_initialize() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(QuidMilestoneEscrowContract, ());
+    let client = QuidMilestoneEscrowContractClient::new(&env, &contract_id);
+    let caller = Address::generate(&env);
+
+    assert_eq!(
+        client.try_set_program_status(&caller, &ProgramStatus::Cancelled),
+        Err(Ok(MilestoneEscrowError::NotInitialized))
+    );
+    assert_eq!(
+        client.try_set_milestone_status(&caller, &MilestoneStatus::Paid),
+        Err(Ok(MilestoneEscrowError::NotInitialized))
+    );
+    assert_eq!(client.get_program_status(), ProgramStatus::Active);
+    assert_eq!(client.get_milestone_status(), MilestoneStatus::Pending);
+}
+
+#[test]
+fn test_status_setters_reject_non_admin_caller() {
+    let (env, client, _admin) = setup_admin();
+    let outsider = Address::generate(&env);
+
+    // The outsider signs for themselves, but is not the admin.
+    assert_eq!(
+        client.try_set_program_status(&outsider, &ProgramStatus::Cancelled),
+        Err(Ok(MilestoneEscrowError::NotAuthorized))
+    );
+    assert_eq!(
+        client.try_set_milestone_status(&outsider, &MilestoneStatus::Paid),
+        Err(Ok(MilestoneEscrowError::NotAuthorized))
+    );
+    assert_eq!(client.get_program_status(), ProgramStatus::Active);
+    assert_eq!(client.get_milestone_status(), MilestoneStatus::Pending);
+}
+
+#[test]
+fn test_status_setters_require_admin_signature() {
+    let (env, client, admin) = setup_admin();
+    let outsider = Address::generate(&env);
+
+    // An outsider passes the admin's address but only the outsider signed:
+    // the admin's require_auth must fail.
+    env.mock_auths(&[MockAuth {
+        address: &outsider,
+        invoke: &MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "set_program_status",
+            args: (&admin, ProgramStatus::Cancelled).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(client
+        .try_set_program_status(&admin, &ProgramStatus::Cancelled)
+        .is_err());
+
+    env.mock_auths(&[MockAuth {
+        address: &outsider,
+        invoke: &MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "set_milestone_status",
+            args: (&admin, MilestoneStatus::Paid).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(client
+        .try_set_milestone_status(&admin, &MilestoneStatus::Paid)
+        .is_err());
+
+    // No signatures at all also fails.
+    env.set_auths(&[]);
+    assert!(client
+        .try_set_program_status(&admin, &ProgramStatus::Cancelled)
+        .is_err());
+
+    assert_eq!(client.get_program_status(), ProgramStatus::Active);
+    assert_eq!(client.get_milestone_status(), MilestoneStatus::Pending);
+}
+
+#[test]
+fn test_status_setters_record_admin_auth() {
+    let (env, client, admin) = setup_admin();
+
+    client.set_program_status(&admin, &ProgramStatus::Draft);
+    let auths = env.auths();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(auths[0].0, admin);
+
+    client.set_milestone_status(&admin, &MilestoneStatus::Approved);
+    let auths = env.auths();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(auths[0].0, admin);
+
+    assert_eq!(client.get_program_status(), ProgramStatus::Draft);
+    assert_eq!(client.get_milestone_status(), MilestoneStatus::Approved);
+}
+
+#[test]
+fn test_set_admin_hands_over_setter_rights() {
+    let (env, client, admin) = setup_admin();
+    let new_admin = Address::generate(&env);
+
+    // Only the current admin can hand over.
+    assert_eq!(
+        client.try_set_admin(&new_admin, &new_admin),
+        Err(Ok(MilestoneEscrowError::NotAuthorized))
+    );
+
+    client.set_admin(&admin, &new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+
+    // The old admin loses setter rights; the new admin gains them.
+    assert_eq!(
+        client.try_set_program_status(&admin, &ProgramStatus::Cancelled),
+        Err(Ok(MilestoneEscrowError::NotAuthorized))
+    );
+    client.set_program_status(&new_admin, &ProgramStatus::Completed);
+    assert_eq!(client.get_program_status(), ProgramStatus::Completed);
 }
 
 #[test]
