@@ -2164,7 +2164,7 @@ fn test_reject_submission_unlocks_pooled_stake() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #19)")]
+#[should_panic(expected = "Error(Contract, #21)")]
 fn test_cannot_reject_submission_twice() {
     let (env, contract_id, owner, token_address) = setup_test_env();
     let client = QuidStoreContractClient::new(&env, &contract_id);
@@ -2230,7 +2230,7 @@ fn test_cannot_payout_rejected_submission() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #19)")]
+#[should_panic(expected = "Error(Contract, #21)")]
 fn test_cannot_update_rejected_submission() {
     let (env, contract_id, owner, token_address) = setup_test_env();
     let client = QuidStoreContractClient::new(&env, &contract_id);

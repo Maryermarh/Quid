@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { SubmissionStatus } from '@prisma/client';
+import { rpc } from '@stellar/stellar-sdk';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -12,7 +13,7 @@ describe('IndexerService (issue #314)', () => {
   let service: IndexerService;
   let prisma: {
     submission: { updateMany: jest.Mock };
-    indexerState: { upsert: jest.Mock };
+    indexerState: { upsert: jest.Mock; update: jest.Mock };
   };
   let notifications: {
     notifySubmissionPaid: jest.Mock;
@@ -23,7 +24,7 @@ describe('IndexerService (issue #314)', () => {
   beforeEach(() => {
     prisma = {
       submission: { updateMany: jest.fn() },
-      indexerState: { upsert: jest.fn() },
+      indexerState: { upsert: jest.fn(), update: jest.fn() },
     };
 
     notifications = {
@@ -169,11 +170,26 @@ describe('IndexerService (issue #314)', () => {
       config.get.mockImplementation((key: string) =>
         key === 'RPC_URL' ? 'https://rpc.example' : 'C123',
       );
-      prisma.indexerState.upsert.mockResolvedValue({});
+      prisma.indexerState.upsert.mockResolvedValue({
+        lastLedger: BigInt(0),
+        lastCursor: null,
+      });
+      prisma.indexerState.update.mockResolvedValue({});
+      const getEvents = jest
+        .spyOn(rpc.Server.prototype, 'getEvents')
+        .mockResolvedValue({
+          events: [],
+          latestLedger: 1,
+          cursor: null,
+        });
 
-      await service.pollEvents();
+      try {
+        await service.pollEvents();
 
-      expect(prisma.indexerState.upsert).toHaveBeenCalled();
+        expect(prisma.indexerState.upsert).toHaveBeenCalled();
+      } finally {
+        getEvents.mockRestore();
+      }
     });
   });
 });

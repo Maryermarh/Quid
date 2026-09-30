@@ -21,5 +21,9 @@ pub enum QuidError {
     InsufficientAssetBalance = 16,
     FeeCollectorNotSet = 17,
     StakingPoolNotSet = 18,
-    AlreadyRejected = 19,
+    /// Hunter is banned or muted in the configured moderation registry (#305).
+    HunterBanned = 19,
+    /// No moderation registry has been configured.
+    ModerationRegistryNotSet = 20,
+    AlreadyRejected = 21,
 }
