@@ -7,6 +7,7 @@ import QuestHeader from "./QuestHeader";
 import SubmissionCard from "./SubmissionCard";
 import TaskInfo from "./TaskInfo";
 import { Submission, Quest } from "@/app/hooks/useQuestData";
+import { toast } from "@/context/ToastContext";
 
 export default function CreatorQuestDetail({
   quest,
@@ -28,13 +29,19 @@ export default function CreatorQuestDetail({
   const [rejectReason, setRejectReason] = useState("");
 
   const handleApprove = (submissionId: string) => {
-    setApprovedSubmissions((prev) => {
-      if (prev.includes(submissionId)) {
-        return prev.filter((id) => id !== submissionId);
-      }
-      return [...prev, submissionId];
-    });
-    setRejectedSubmissions((prev) => prev.filter((id) => id !== submissionId));
+    const isCurrentlyApproved = approvedSubmissions.includes(submissionId);
+    if (isCurrentlyApproved) {
+      setApprovedSubmissions((prev) => prev.filter((id) => id !== submissionId));
+      toast.info("Submission approval revoked", {
+        description: `Submission #${submissionId} returned to pending.`,
+      });
+    } else {
+      setApprovedSubmissions((prev) => [...prev, submissionId]);
+      setRejectedSubmissions((prev) => prev.filter((id) => id !== submissionId));
+      toast.success("Submission approved! Payout initiated.", {
+        description: `Reward payout queued and anti-spam stake refund unlocked for submission #${submissionId}.`,
+      });
+    }
   };
 
   const handleReject = (submissionId: string) => {
@@ -45,6 +52,11 @@ export default function CreatorQuestDetail({
       return [...prev, submissionId];
     });
     setApprovedSubmissions((prev) => prev.filter((id) => id !== submissionId));
+    toast.error("Submission rejected", {
+      description: rejectReason
+        ? `Reason: ${rejectReason}`
+        : `Submission #${submissionId} marked as rejected.`,
+    });
     setRejectConfirm(null);
     setRejectReason("");
   };
