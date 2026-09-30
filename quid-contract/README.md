@@ -14,6 +14,7 @@ Soroban (Rust) smart contracts for Quid: bounty escrow, reputation, milestone pr
 | `quid-badge-nft` | `quid_badge_nft.wasm` | Badge NFTs for completed missions / reputation tiers |
 | `quid-fee-collector` | `quid_fee_collector.wasm` | Protocol fee vault: configurable cut, per-token balances, admin withdrawal |
 | `quid-mission-factory` | `quid_mission_factory.wasm` | Curated mission templates that launch into configured store instances |
+| `quid-moderation-registry` | `quid_moderation_registry.wasm` | Shared ban/mute lists read by store gates (`submit_feedback`) |
 | `hello-world` | `hello_world.wasm` | Scaffold only — safe to ignore |
 
 ## Reward tokens (testnet)
@@ -291,6 +292,31 @@ stellar contract invoke \
 - `cancel_mission` / `pause_mission` / `update_mission_status`
 - `slash_hunter_stake` / treasury helpers
 - `set_fee_collector` / `get_fee_collector` — route the protocol fee to `quid-fee-collector`
+- `set_moderation_registry` / `get_moderation_registry` — reject banned/muted hunters in `submit_feedback` via `quid-moderation-registry`
+
+#### Event catalog and schema stability
+
+`quid-store` contract events are part of the backend indexer's integration
+contract. Topics are shown in order; event payload fields are encoded in the
+order shown. Soroban `u64`/`u32`/`i128` values decode as integers and `Address`
+values as Stellar addresses.
+
+| Event name | Topics | Data fields | Emitted by |
+|------------|--------|-------------|------------|
+| `MissionCreateEvent` | `["mission", "create"]` | `mission_id: u64`, `owner: Address`, `title: String`, `description_cid: String`, `reward_token: Address`, `reward_amount: i128`, `max_participants: u32`, `created_at: u64` | `create_mission`, after the mission is stored and any protocol fee is handled |
+| `SubNewEvent` | `["sub", "new"]` | `mission_id: u64`, `hunter: Address`, `ipfs_cid: String` | `submit_feedback`, after the submission and stake are stored |
+| `PayoutDoneEvent` | `["payout", "done"]` | `mission_id: u64`, `hunter: Address` | `payout_participant`, after the reward is paid and submission marked paid |
+| `MissionCancelEvent` | `["mission", "cancel"]` | `mission_id: u64` (single-value data) | `cancel_mission`, after cancellation and refunds |
+| `MissionPauseEvent` | `["mission", "pause"]` | `mission_id: u64` (single-value data) | `pause_mission`, after the mission is paused |
+| `FeeChargedEvent` | `["fee", "charged"]` | `mission_id: u64`, `token: Address`, `amount: i128` | `create_mission`, only when a non-zero protocol fee is charged |
+
+There is currently no rejection event. `update_mission_status` also does not
+emit an event; adding a new event or changing an existing topic, field order,
+field type, or single-value encoding requires a reviewed schema change. Before
+merging such a change, update this catalog, notify backend/indexer owners,
+version and deploy the contract/indexer compatibility change together, and
+cover old and new event handling in tests. Do not silently reuse an existing
+topic with a different payload.
 
 ### `quid-reputation`
 
@@ -312,7 +338,8 @@ See [contracts/quid-referral/README.md](./contracts/quid-referral/README.md).
 ### `quid-milestone-escrow`
 
 - `create_program` / `add_milestone` / `approve_milestone` / `cancel_program`
-- getters for program / milestone status
+- `initialize` / `get_admin` / `set_admin`
+- getters for program / milestone status; `set_program_status` / `set_milestone_status` are admin only
 
 ### `quid-dispute`
 
@@ -370,7 +397,6 @@ cargo test -p quid-mission-factory
 - Store → reputation hook on successful payout (also wires `quid-referral.record_payout`)
 - Store/reputation → `quid-badge-nft` `mint_badge` call on successful payout
   (the badge contract already exposes the minter allow-list for it)
-- Align milestone status helpers with production auth rules
 - Wire `quid-dispute` into store reject / payout holds
 - Remove or archive `hello-world`
 

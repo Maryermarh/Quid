@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { AlertCircle, LoaderCircle } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import QuestRow from "./QuestRow";
 import EmptyActiveQuests from "./EmptyActiveQuests";
 import type { QuestRowData, QuestTabKey } from "./types";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SkeletonList } from "@/components/ui/skeleton-list";
 import { useWallet } from "@/context/WalletProvider";
 import { creatorApiFetch } from "@/lib/creator-api";
 
@@ -204,23 +206,16 @@ export default function QuestsHub() {
 
       <div className="pt-6">
         {!connected || !publicKey ? (
-          <div className="flex flex-col items-center py-12 text-center">
-            <p className="text-sm text-muted-foreground">
-              Connect your wallet to load your quests.
-            </p>
-            <button
-              type="button"
-              onClick={() => void connect()}
-              className="mt-4  bg-[#8B5CF6] px-4 py-2 text-sm font-semibold text-foreground hover:bg-[#7c0de0]"
-            >
-              Connect wallet
-            </button>
-          </div>
+          <EmptyState
+            title="Wallet Not Connected"
+            description="Connect your wallet to load and manage your quests."
+            action={{
+              label: "Connect wallet",
+              onClick: () => void connect(),
+            }}
+          />
         ) : loading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-            <LoaderCircle className="size-4 animate-spin" />
-            Loading quests…
-          </div>
+          <SkeletonList count={3} variant="quest" />
         ) : error ? (
           <div className="flex flex-col items-center py-12 text-center">
             <AlertCircle className="mb-3 size-6 text-red-400" />
@@ -237,9 +232,11 @@ export default function QuestsHub() {
           activeTab === "active" ? (
             <EmptyActiveQuests />
           ) : (
-            <p className="py-12 text-center text-sm text-muted-foreground">
-              No {activeTab} quests yet.
-            </p>
+            <EmptyState
+              title={`No ${activeTab} quests`}
+              description={`You don't have any ${activeTab} quests right now.`}
+              variant="compact"
+            />
           )
         ) : (
           <div className="divide-y divide-white/5">

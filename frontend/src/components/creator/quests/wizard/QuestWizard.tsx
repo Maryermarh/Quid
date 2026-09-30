@@ -13,6 +13,7 @@ import RewardsStep, { isRewardsStepValid } from "./steps/RewardsStep";
 import ScheduleStep, { isScheduleStepValid } from "./steps/ScheduleStep";
 import ReviewStep from "./steps/ReviewStep";
 import { WIZARD_STEPS, createDefaultWizardData, type QuestWizardData } from "./types";
+import { toast } from "@/context/ToastContext";
 
 function slugify(title: string): string {
   const slug = title
@@ -66,7 +67,11 @@ export default function QuestWizard({
     if (!stepValid) return;
 
     if (isLastStep) {
-      onPublish(slugify(data.basics.title));
+      const slug = slugify(data.basics.title);
+      toast.success("Quest created successfully!", {
+        description: `"${data.basics.title || "Quest"}" has been published to the campaign.`,
+      });
+      onPublish(slug);
       return;
     }
 
@@ -76,6 +81,9 @@ export default function QuestWizard({
   }
 
   function handleSaveDraft() {
+    toast.info("Draft saved successfully!", {
+      description: `Draft "${data.basics.title || "Untitled quest"}" has been saved.`,
+    });
     // Stub until POST /missions/drafts is wired up.
     window.location.href = "/creator/quests";
   }

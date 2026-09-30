@@ -8,4 +8,8 @@ pub enum MilestoneEscrowError {
     ProgramNotFound = 3,
     MilestoneNotFound = 4,
     NotAuthorized = 5,
+    /// Issue #293: a status setter was called before `initialize` set an admin.
+    NotInitialized = 6,
+    /// Issue #293: `initialize` may only run once.
+    AlreadyInitialized = 7,
 }

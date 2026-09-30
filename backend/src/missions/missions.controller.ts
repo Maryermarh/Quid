@@ -14,6 +14,8 @@ import { MissionsService } from './missions.service';
 import { ListMissionsQueryDto } from './dto/list-missions-query.dto';
 import { SaveDraftDto } from './dto/save-draft.dto';
 import { RejectSubmissionDto } from './dto/reject-submission.dto';
+import { PublishDraftDto } from './dto/publish-draft.dto';
+import { AttachMissionDto } from './dto/attach-mission.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Prisma } from '@prisma/client';
 
@@ -98,5 +100,25 @@ export class MissionsController {
     @Req() req: AuthenticatedRequest,
   ): Promise<Prisma.MissionDraftGetPayload<null>> {
     return this.missionsService.saveDraft(req.user.address, dto);
+  }
+
+  @Post('drafts/:draftId/publish')
+  @UseGuards(JwtAuthGuard)
+  publishDraft(
+    @Param('draftId') draftId: string,
+    @Body() dto: PublishDraftDto,
+    @Req() req: AuthenticatedRequest,
+  ): Promise<Prisma.MissionGetPayload<null>> {
+    return this.missionsService.publishDraft(draftId, req.user.address, dto);
+  }
+
+  @Post(':id/attach')
+  @UseGuards(JwtAuthGuard)
+  attachMission(
+    @Param('id') id: string,
+    @Body() dto: AttachMissionDto,
+    @Req() req: AuthenticatedRequest,
+  ): Promise<Prisma.MissionGetPayload<null>> {
+    return this.missionsService.attachMission(id, req.user.address, dto);
   }
 }

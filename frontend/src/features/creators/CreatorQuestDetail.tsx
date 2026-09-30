@@ -1,22 +1,26 @@
 import { useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import EmptyState from "./EmptyState";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SkeletonList } from "@/components/ui/skeleton-list";
 import QuestHeader from "./QuestHeader";
 import SubmissionCard from "./SubmissionCard";
 import TaskInfo from "./TaskInfo";
 import { Submission, Quest } from "@/app/hooks/useQuestData";
+import { toast } from "@/context/ToastContext";
 
 export default function CreatorQuestDetail({
   quest,
   submissions,
   questId,
   isActive = true,
+  loading = false,
 }: {
   quest?: Quest | null;
   submissions: Submission[];
   questId?: string;
   isActive?: boolean;
+  loading?: boolean;
 }) {
   const router = useRouter();
   const [approvedSubmissions, setApprovedSubmissions] = useState<string[]>([]);
@@ -25,13 +29,19 @@ export default function CreatorQuestDetail({
   const [rejectReason, setRejectReason] = useState("");
 
   const handleApprove = (submissionId: string) => {
-    setApprovedSubmissions((prev) => {
-      if (prev.includes(submissionId)) {
-        return prev.filter((id) => id !== submissionId);
-      }
-      return [...prev, submissionId];
-    });
-    setRejectedSubmissions((prev) => prev.filter((id) => id !== submissionId));
+    const isCurrentlyApproved = approvedSubmissions.includes(submissionId);
+    if (isCurrentlyApproved) {
+      setApprovedSubmissions((prev) => prev.filter((id) => id !== submissionId));
+      toast.info("Submission approval revoked", {
+        description: `Submission #${submissionId} returned to pending.`,
+      });
+    } else {
+      setApprovedSubmissions((prev) => [...prev, submissionId]);
+      setRejectedSubmissions((prev) => prev.filter((id) => id !== submissionId));
+      toast.success("Submission approved! Payout initiated.", {
+        description: `Reward payout queued and anti-spam stake refund unlocked for submission #${submissionId}.`,
+      });
+    }
   };
 
   const handleReject = (submissionId: string) => {
@@ -42,6 +52,11 @@ export default function CreatorQuestDetail({
       return [...prev, submissionId];
     });
     setApprovedSubmissions((prev) => prev.filter((id) => id !== submissionId));
+    toast.error("Submission rejected", {
+      description: rejectReason
+        ? `Reason: ${rejectReason}`
+        : `Submission #${submissionId} marked as rejected.`,
+    });
     setRejectConfirm(null);
     setRejectReason("");
   };
@@ -161,8 +176,14 @@ export default function CreatorQuestDetail({
           <div>
             {activeTab === "details" ? (
               <TaskInfo />
+            ) : loading ? (
+              <SkeletonList count={2} variant="submission" />
             ) : submissions.length === 0 ? (
-              <EmptyState message="No submissions yet." />
+              <EmptyState
+                title="No Submissions Yet"
+                description="Responses will appear here once participants start submitting feedback to this quest."
+                variant="card"
+              />
             ) : (
               submissions.map((sub) => (
                 <div key={sub.id}>

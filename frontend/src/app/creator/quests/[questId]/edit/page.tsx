@@ -5,9 +5,9 @@ import { useRouter } from "next/navigation";
 import { useQuestData } from "@/app/hooks/useQuestData";
 import { creatorApiFetch } from "@/lib/creator-api";
 import { useWallet } from "@/context/WalletProvider";
-import { AlertCircle, CheckCircle } from "lucide-react";
-
-type Notification = { type: "success" | "error"; message: string } | null;
+import { useFormStatus } from "@/hooks/useFormStatus";
+import { FormStatus } from "@/components/ui/FormStatus";
+import { Button } from "@/components/ui/button";
 
 export default function EditQuestPage({ params }: { params: Promise<{ questId: string }> }) {
   const { questId } = use(params);
@@ -22,8 +22,7 @@ export default function EditQuestPage({ params }: { params: Promise<{ questId: s
     deadline: quest?.deadline instanceof Date ? quest.deadline.toISOString().slice(0, 16) : (quest?.deadline as string | undefined) || "",
   });
 
-  const [isLoading, setIsLoading] = useState(false);
-  const [notification, setNotification] = useState<Notification>(null);
+  const { status, error, isLoading, run, reset } = useFormStatus();
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -35,43 +34,40 @@ export default function EditQuestPage({ params }: { params: Promise<{ questId: s
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
-    setNotification(null);
 
-    try {
-      const dto = {
-        title: formData.title,
-        description: formData.description,
-        reward: formData.reward ? Number(formData.reward) : undefined,
-        deadline: formData.deadline || undefined,
-      };
+    await run(
+      async () => {
+        const dto = {
+          title: formData.title,
+          description: formData.description,
+          reward: formData.reward ? Number(formData.reward) : undefined,
+          deadline: formData.deadline || undefined,
+        };
 
-      if (publicKey) {
-        const response = await creatorApiFetch(
-          "/missions/drafts",
-          publicKey,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(dto),
-          },
-        );
+        if (publicKey) {
+          const response = await creatorApiFetch(
+            "/missions/drafts",
+            publicKey,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(dto),
+            },
+          );
 
-        if (!response.ok) {
-          throw new Error(`Failed to save draft (${response.status})`);
+          if (!response.ok) {
+            throw new Error(`Failed to save draft (${response.status})`);
+          }
         }
-      }
 
-      setNotification({ type: "success", message: "Quest draft saved successfully!" });
-      setTimeout(() => router.push(`/creator/quests/${questId}`), 800);
-    } catch (error) {
-      setNotification({
-        type: "error",
-        message: error instanceof Error ? error.message : "Failed to save changes",
-      });
-    } finally {
-      setIsLoading(false);
-    }
+        setTimeout(() => router.push(`/creator/quests/${questId}`), 800);
+      },
+      {
+        pending: "Saving quest changes...",
+        success: "Quest draft saved successfully!",
+        error: (err) => (err instanceof Error ? err.message : "Failed to save changes"),
+      },
+    );
   };
 
   const handleCancel = () => {
@@ -87,26 +83,19 @@ export default function EditQuestPage({ params }: { params: Promise<{ questId: s
           <p className="text-foreground">Quest ID: {questId}</p>
         </div>
 
-        {/* Notification toast */}
-        {notification && (
-          <div
-            className={`flex items-center gap-2 mb-4 px-4 py-3  text-sm ${
-              notification.type === "success"
-                ? "bg-green-500/10 border border-green-500/30 text-green-300"
-                : "bg-red-500/10 border border-red-500/30 text-red-300"
-            }`}
-          >
-            {notification.type === "success" ? (
-              <CheckCircle className="w-5 h-5 shrink-0" />
-            ) : (
-              <AlertCircle className="w-5 h-5 shrink-0" />
-            )}
-            <p>{notification.message}</p>
-          </div>
-        )}
+        {/* Form Status pattern banner */}
+        <div className="mb-6">
+          <FormStatus
+            status={status}
+            pendingMessage="Saving quest draft..."
+            successMessage="Quest draft saved successfully! Redirecting..."
+            errorMessage={error}
+            onRetry={reset}
+          />
+        </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="brutal-border brutal-shadow bg-card  p-6 md:p-8 space-y-6">
+        <form onSubmit={handleSubmit} className="brutal-border brutal-shadow bg-card p-6 md:p-8 space-y-6">
           {/* Title */}
           <div>
             <label className="block text-sm font-medium mb-2">Quest Title</label>
@@ -115,7 +104,7 @@ export default function EditQuestPage({ params }: { params: Promise<{ questId: s
               name="title"
               value={formData.title}
               onChange={handleChange}
-              className="w-full brutal-border bg-background border border-foreground  px-4 py-2 text-foreground focus:outline-none focus:border-[#9011FF]"
+              className="w-full brutal-border bg-background border border-foreground px-4 py-2 text-foreground focus:outline-none focus:border-[#9011FF]"
               placeholder="Enter quest title"
               required
             />
@@ -129,7 +118,7 @@ export default function EditQuestPage({ params }: { params: Promise<{ questId: s
               value={formData.description}
               onChange={handleChange}
               rows={5}
-              className="w-full brutal-border bg-background border border-foreground  px-4 py-2 text-foreground focus:outline-none focus:border-[#9011FF] resize-none"
+              className="w-full brutal-border bg-background border border-foreground px-4 py-2 text-foreground focus:outline-none focus:border-[#9011FF] resize-none"
               placeholder="Enter quest description"
             />
           </div>
@@ -142,7 +131,7 @@ export default function EditQuestPage({ params }: { params: Promise<{ questId: s
               name="reward"
               value={formData.reward}
               onChange={handleChange}
-              className="w-full brutal-border bg-background border border-foreground  px-4 py-2 text-foreground focus:outline-none focus:border-[#9011FF]"
+              className="w-full brutal-border bg-background border border-foreground px-4 py-2 text-foreground focus:outline-none focus:border-[#9011FF]"
               placeholder="Enter reward amount"
             />
           </div>
@@ -155,26 +144,29 @@ export default function EditQuestPage({ params }: { params: Promise<{ questId: s
               name="deadline"
               value={formData.deadline}
               onChange={handleChange}
-              className="w-full brutal-border bg-background border border-foreground  px-4 py-2 text-foreground focus:outline-none focus:border-[#9011FF]"
+              className="w-full brutal-border bg-background border border-foreground px-4 py-2 text-foreground focus:outline-none focus:border-[#9011FF]"
             />
           </div>
 
           {/* Buttons */}
           <div className="flex flex-col md:flex-row gap-4 pt-6">
-            <button
+            <Button
               type="submit"
-              disabled={isLoading}
-              className="flex-1 brutal-border brutal-shadow bg-brutal-pink hover:translate-x-[-1px] hover:translate-y-[-1px] disabled:opacity-50 text-foreground font-semibold py-3  transition-colors duration-200"
+              variant="destructive"
+              loading={isLoading}
+              loadingText="Saving Changes..."
+              className="flex-1 py-3 text-base h-auto"
             >
-              {isLoading ? "Saving..." : "Save Changes"}
-            </button>
-            <button
+              Save Changes
+            </Button>
+            <Button
               type="button"
+              variant="outline"
               onClick={handleCancel}
-              className="flex-1 bg-[#241B4A] hover:bg-[#2d2453] text-foreground font-semibold py-3  transition-colors duration-200"
+              className="flex-1 py-3 text-base h-auto"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </form>
       </div>

@@ -5,6 +5,8 @@ import { uploadFeedbackToIpfs } from "@/lib/upload-api";
 import { submitFeedbackToContract, SubmissionReceipt } from "@/lib/soroban-client";
 import { useWallet } from "@/context/WalletProvider";
 import ProofFileUpload from "@/components/hunter/ProofFileUpload";
+import { toast } from "@/context/ToastContext";
+import { parseQuidError } from "@/lib/errorMap";
 import {
   AlertCircle,
   CheckCircle2,
@@ -76,6 +78,11 @@ export default function SubmitFeedbackModal({
 
     // Step 1: Upload to IPFS via Backend API
     setStep("uploading_ipfs");
+    toast.loading("Uploading feedback & proof to IPFS...", {
+      id: "feedback-submit",
+      title: "Step 1 of 2",
+    });
+
     let cid = "";
     try {
       // Map string IDs to numeric/u64 mission ID
@@ -104,11 +111,21 @@ export default function SubmitFeedbackModal({
       const msg = uploadErr instanceof Error ? uploadErr.message : "Failed to upload feedback to IPFS";
       setErrorMessage(`Upload Blocked: ${msg}. Smart contract was NOT invoked.`);
       setStep("error");
+      toast.error("Upload Blocked", {
+        id: "feedback-submit",
+        description: `${msg}. Smart contract was not invoked.`,
+      });
       return; // Upload failure BLOCKS chain call
     }
 
     // Step 2: Invoke submit_feedback on Soroban smart contract with CID
     setStep("signing_chain");
+    toast.loading("Submitting transaction to Stellar Soroban...", {
+      id: "feedback-submit",
+      title: "Step 2 of 2",
+      description: "Please approve the transaction in Freighter wallet",
+    });
+
     try {
       const numericMissionId =
         typeof quest.id === "number"
@@ -124,11 +141,25 @@ export default function SubmitFeedbackModal({
 
       setReceipt(txReceipt);
       setStep("success");
+      toast.success("Feedback submitted on-chain!", {
+        id: "feedback-submit",
+        description: `Tx: ${txReceipt.txHash.slice(0, 18)}... (1 XLM stake locked)`,
+      });
       onSuccess?.(txReceipt);
     } catch (chainErr: unknown) {
-      const msg = chainErr instanceof Error ? chainErr.message : "Soroban transaction failed";
+      const quidErr = parseQuidError(chainErr);
+      const msg =
+        quidErr.title !== "Transaction failed"
+          ? quidErr.title
+          : chainErr instanceof Error
+            ? chainErr.message
+            : "Soroban transaction failed";
       setErrorMessage(`Smart Contract Error: ${msg}`);
       setStep("error");
+      toast.error(msg, {
+        id: "feedback-submit",
+        description: quidErr.description,
+      });
     }
   };
 

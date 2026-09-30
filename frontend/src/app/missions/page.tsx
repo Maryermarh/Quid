@@ -1,10 +1,10 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useWallet } from '@/context/WalletProvider';
 import WalletConnectButton from '@/components/wallet/WalletConnectButton';
+import { EmptyState } from '@/components/ui/empty-state';
 import { ONBOARDING_ROUTES } from '@/lib/onboarding';
 
 export default function MissionsPage() {
@@ -28,20 +28,26 @@ export default function MissionsPage() {
         <WalletConnectButton variant="primary" />
       </header>
 
-      <main className="mx-auto max-w-4xl px-6 py-16 text-center">
-        <p className="text-muted-foreground mb-2">Welcome, hunter</p>
-        <p className="text-sm text-muted-foreground mb-8 font-mono">{publicKey}</p>
-        <h2 className="text-3xl font-bold mb-4">Available missions coming soon</h2>
-        <p className="text-muted-foreground mb-8 max-w-lg mx-auto">
-          Browse feedback bounties from Stellar founders, complete missions, and
-          earn USDC rewards. This board will populate once missions go live.
-        </p>
-        <Link
-          href="/"
-          className="text-[#9011FF] hover:text-purple-400 transition-colors"
-        >
-          ← Back to home
-        </Link>
+      <main className="mx-auto max-w-3xl px-6 py-16">
+        <div className="mb-6 text-center">
+          <p className="text-muted-foreground mb-1">Welcome, hunter</p>
+          <p className="text-xs text-muted-foreground font-mono truncate max-w-sm mx-auto">{publicKey}</p>
+        </div>
+
+        <EmptyState
+          title="Available Missions Coming Soon"
+          description="Browse feedback bounties from Stellar founders, complete missions, and earn USDC rewards. This board will populate once new missions go live."
+          variant="card"
+          action={{
+            label: "Explore Hunter Dashboard",
+            href: "/hunter",
+          }}
+          secondaryAction={{
+            label: "Back to Home",
+            href: "/",
+            variant: "outline",
+          }}
+        />
       </main>
     </div>
   );

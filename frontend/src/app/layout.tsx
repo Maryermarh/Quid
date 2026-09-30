@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { WalletProvider } from "@/context/WalletProvider";
+import { ToastProvider } from "@/context/ToastContext";
 
 const spaceGrotesk = Space_Grotesk({
   variable: "--font-space-grotesk",
@@ -28,9 +29,11 @@ export default function RootLayout({
       <body
         className={`${spaceGrotesk.variable} ${geistMono.variable} font-sans antialiased bg-background text-foreground brutal-grid-bg`}
       >
-        <WalletProvider>
-          {children}
-        </WalletProvider>
+        <ToastProvider>
+          <WalletProvider>
+            {children}
+          </WalletProvider>
+        </ToastProvider>
       </body>
     </html>
   );

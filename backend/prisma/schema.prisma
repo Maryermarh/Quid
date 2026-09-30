@@ -74,6 +74,8 @@ model Mission {
  participantsCount Int @default(0) @map("participants_count")
  status MissionStatus @default(OPEN) @map("status")
  aiSummary String @map("ai_summary")
+ onChainId String? @unique @map("on_chain_id")
+ indexedFromChain Boolean @default(false) @map("indexed_from_chain")
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -90,6 +92,8 @@ model MissionDraft {
  ownerAddress String @map("owner_address")
  title String @map("title")
  data Json @map("data")
+ publishedAt DateTime? @map("published_at")
+ publishedMissionId String? @unique @map("published_mission_id")
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -108,6 +112,8 @@ model Submission {
  sentiment Float? @map("sentiment")
  status SubmissionStatus @default(PENDING) @map("status")
  rejectionReason String? @map("rejection_reason")
+ txHash String? @unique @map("tx_hash")
+ chainConfirmed Boolean @default(false) @map("chain_confirmed")
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
 

@@ -2,6 +2,7 @@
 
 import { motion, Variants } from "framer-motion";
 import Image from "next/image";
+import Link from "next/link";
 import { useState } from "react";
 
 const containerVariants: Variants = {
@@ -198,24 +199,22 @@ export default function Footer() {
           whileInView="visible"
           viewport={{ once: true, amount: 0.3 }}
         >
-          <motion.a
-            href="#"
-            className="text-gray-600 hover:text-white transition-colors duration-300"
-            variants={linkVariants}
-            initial="rest"
-            whileHover="hover"
-          >
-            Privacy Policy
-          </motion.a>
-          <motion.a
-            href="#"
-            className="text-gray-600 hover:text-white transition-colors duration-300"
-            variants={linkVariants}
-            initial="rest"
-            whileHover="hover"
-          >
-            Terms of Service
-          </motion.a>
+          <motion.div variants={itemVariants}>
+            <Link
+              href="/privacy"
+              className="text-gray-600 hover:text-white transition-colors duration-300"
+            >
+              Privacy Policy
+            </Link>
+          </motion.div>
+          <motion.div variants={itemVariants}>
+            <Link
+              href="/terms"
+              className="text-gray-600 hover:text-white transition-colors duration-300"
+            >
+              Terms of Service
+            </Link>
+          </motion.div>
         </motion.div>
       </motion.div>
     </footer>
