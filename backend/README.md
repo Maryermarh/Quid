@@ -28,14 +28,13 @@ The frontend should call this API for browse/auth/upload; Freighter should call 
 | SEP-10 challenge + verify → JWT | Live |
 | Mission list / detail / `me` / submissions (read) | Live |
 | Mission drafts (`POST /missions/drafts`) | Live |
+| Draft publish / on-chain mission attachment | Live |
 | Upload endpoints | Stub (acks bytes/JSON only — no IPFS) |
-| Chain indexer cron | Scaffold (checkpoint only — no event sync) |
+| Chain indexer cron | Live (quid-store create, submit, payout, cancel, and pause events) |
 
 ## What’s missing (MVP gaps)
 
 - Real IPFS / Pinata (or similar) pinning → return CID
-- Indexer: poll `quid-store` events → upsert missions/submissions
-- Publish mission after on-chain create (persist `onChainId`)
 - Create submission / approve / reject API flows synced with chain
 - Hardening: rate limits, locked-down CORS, production secrets
 - Frontend not wired to this API yet
@@ -70,7 +69,7 @@ cp .env.example .env
 | `STELLAR_SERVER_SECRET` | Server keypair secret for SEP-10 |
 | `HOME_DOMAIN` / `WEB_AUTH_DOMAIN` | SEP-10 domains |
 | `STELLAR_NETWORK` | Network passphrase (testnet by default) |
-| `RPC_URL` / `CONTRACT_ID` | For indexer (when implemented) |
+| `RPC_URL` / `CONTRACT_ID` | Soroban RPC endpoint and `quid-store` contract ID for event indexing |
 
 Generate a Stellar keypair for `STELLAR_SERVER_SECRET` (keep it server-side only).
 
@@ -96,8 +95,34 @@ API: [http://localhost:3001](http://localhost:3001)
 | `GET` | `/missions/:id` | No | Detail |
 | `GET` | `/missions/:id/submissions` | JWT | Owner only |
 | `POST` | `/missions/drafts` | JWT | Save draft |
+| `POST` | `/missions/drafts/:draftId/publish` | JWT | Publish an owned draft after on-chain creation; creates or enriches the linked mission |
+| `POST` | `/missions/:id/attach` | JWT | Attach an on-chain mission ID to an owned mission |
 | `POST` | `/upload` | JWT | Stub |
 | `POST` | `/upload/json` | JWT | Stub |
+
+### Draft publishing
+
+After `create_mission` succeeds in Freighter, publish the authenticated user's
+saved draft with `POST /missions/drafts/:draftId/publish`. The body includes the
+chain ID and the mission values needed to enrich the indexed record:
+
+```json
+{
+  "onChainId": "42",
+  "descriptionCid": "bafy...",
+  "metadataCid": "bafy...",
+  "metadata": {},
+  "rewardToken": "C...",
+  "rewardAmount": "100",
+  "maxParticipants": 5
+}
+```
+
+The API takes the owner address from the JWT, rejects a draft owned by someone
+else, and links the draft and mission in one database transaction. The separate
+`POST /missions/:id/attach` endpoint links an existing owned mission. The
+`onChainId` column is unique, and published drafts are excluded from later draft
+edits.
 
 ## Scripts
 

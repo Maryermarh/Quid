@@ -16,12 +16,19 @@ use types::{DataKey, Mission, MissionStatus, Submission, SubmissionStatus};
 pub struct MissionCreateEvent {
     pub mission_id: u64,
     pub owner: Address,
+    pub title: String,
+    pub description_cid: String,
+    pub reward_token: Address,
+    pub reward_amount: i128,
+    pub max_participants: u32,
+    pub created_at: u64,
 }
 
 #[contractevent(topics = ["sub", "new"])]
 pub struct SubNewEvent {
     pub mission_id: u64,
     pub hunter: Address,
+    pub ipfs_cid: String,
 }
 
 #[contractevent(topics = ["payout", "done"])]
@@ -187,13 +194,23 @@ impl QuidStoreContract {
 
             FeeChargedEvent {
                 mission_id,
-                token: mission.reward_token,
+                token: mission.reward_token.clone(),
                 amount: fee,
             }
             .publish(&env);
         }
 
-        MissionCreateEvent { mission_id, owner }.publish(&env);
+        MissionCreateEvent {
+            mission_id,
+            owner,
+            title: mission.title,
+            description_cid: mission.description_cid,
+            reward_token: mission.reward_token,
+            reward_amount: mission.reward_amount,
+            max_participants: mission.max_participants,
+            created_at,
+        }
+        .publish(&env);
 
         Ok(mission_id)
     }
@@ -285,7 +302,12 @@ impl QuidStoreContract {
             .persistent()
             .extend_ttl(&key, 5184000, 5184000);
 
-        SubNewEvent { mission_id, hunter }.publish(&env);
+        SubNewEvent {
+            mission_id,
+            hunter,
+            ipfs_cid: submission.ipfs_cid,
+        }
+        .publish(&env);
 
         Ok(())
     }

@@ -349,7 +349,7 @@ describe('MissionsService', () => {
       });
 
       expect(prisma.missionDraft.findFirst).toHaveBeenCalledWith({
-        where: { ownerAddress: '0xabc' },
+        where: { ownerAddress: '0xabc', publishedMissionId: null },
         orderBy: { updatedAt: 'desc' },
       });
       expect(prisma.missionDraft.create).toHaveBeenCalledWith({
@@ -444,7 +444,7 @@ describe('MissionsService', () => {
       });
 
       expect(prisma.missionDraft.findFirst).toHaveBeenCalledWith({
-        where: { ownerAddress: '0xabc' },
+        where: { ownerAddress: '0xabc', publishedMissionId: null },
         orderBy: { updatedAt: 'desc' },
       });
       expect(prisma.missionDraft.update).toHaveBeenCalledWith({
@@ -473,7 +473,7 @@ describe('MissionsService', () => {
         latestDraft,
       );
       expect(prisma.missionDraft.findFirst).toHaveBeenCalledWith({
-        where: { ownerAddress: '0xabc' },
+        where: { ownerAddress: '0xabc', publishedMissionId: null },
         orderBy: { updatedAt: 'desc' },
       });
     });
