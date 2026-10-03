@@ -8,11 +8,15 @@ import {
 import { MissionStatus, Prisma, SubmissionStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   ListMissionsQueryDto,
   MissionListSort,
 } from './dto/list-missions-query.dto';
 import { SaveDraftDto } from './dto/save-draft.dto';
+import { PublishDraftDto } from './dto/publish-draft.dto';
+import { AttachMissionDto } from './dto/attach-mission.dto';
+import { canTransition } from '../submissions/submission-status';
 
 const missionListInclude = {
   owner: {
@@ -49,7 +53,10 @@ function sanitizeDraftData(data: DraftData): DraftDataInput {
 
 @Injectable()
 export class MissionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async listPublicMissions(query: ListMissionsQueryDto): Promise<unknown> {
     const normalizedStatus = query.status?.toUpperCase() as
@@ -97,7 +104,7 @@ export class MissionsService {
     const data = sanitizeDraftData(dto.data);
 
     const latestDraft = await this.prisma.missionDraft.findFirst({
-      where: { ownerAddress },
+      where: { ownerAddress, publishedMissionId: null },
       orderBy: { updatedAt: 'desc' },
     });
 
@@ -126,7 +133,7 @@ export class MissionsService {
     ownerAddress: string,
   ): Promise<Prisma.MissionDraftGetPayload<null>> {
     const draft = await this.prisma.missionDraft.findFirst({
-      where: { ownerAddress },
+      where: { ownerAddress, publishedMissionId: null },
       orderBy: { updatedAt: 'desc' },
     });
 
@@ -135,6 +142,145 @@ export class MissionsService {
     }
 
     return draft;
+  }
+
+  async publishDraft(
+    draftId: string,
+    ownerAddress: string,
+    dto: PublishDraftDto,
+  ): Promise<Prisma.MissionGetPayload<null>> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const draft = await tx.missionDraft.findUnique({
+          where: { id: draftId },
+        });
+
+        if (!draft) {
+          throw new NotFoundException(`Mission draft ${draftId} not found`);
+        }
+
+        if (draft.ownerAddress !== ownerAddress) {
+          throw new ForbiddenException(
+            'You are not authorized to publish this mission draft',
+          );
+        }
+
+        if (draft.publishedMissionId) {
+          throw new ConflictException(
+            `Mission draft ${draftId} has already been published`,
+          );
+        }
+
+        const existingMission = await tx.mission.findUnique({
+          where: { onChainId: dto.onChainId },
+        });
+
+        if (existingMission && existingMission.ownerAddress !== ownerAddress) {
+          throw new ForbiddenException(
+            'The on-chain mission belongs to another owner',
+          );
+        }
+        if (existingMission && !existingMission.indexedFromChain) {
+          throw new ConflictException(
+            `On-chain mission ${dto.onChainId} is already attached`,
+          );
+        }
+
+        const missionData = {
+          ownerAddress,
+          title: draft.title,
+          descriptionCid: dto.descriptionCid,
+          metadataCid: dto.metadataCid ?? dto.descriptionCid,
+          metadata: dto.metadata ?? {},
+          rewardToken: dto.rewardToken,
+          rewardAmount: dto.rewardAmount,
+          maxParticipants: dto.maxParticipants,
+          aiSummary: dto.aiSummary ?? draft.title,
+        };
+
+        const mission = existingMission
+          ? await tx.mission.update({
+              where: { id: existingMission.id },
+              data: { ...missionData, indexedFromChain: false },
+            })
+          : await tx.mission.create({
+              data: { ...missionData, onChainId: dto.onChainId },
+            });
+
+        const updatedDraft = await tx.missionDraft.updateMany({
+          where: { id: draftId, publishedMissionId: null },
+          data: {
+            publishedAt: new Date(),
+            publishedMissionId: mission.id,
+          },
+        });
+
+        if (updatedDraft.count !== 1) {
+          throw new ConflictException(
+            `Mission draft ${draftId} has already been published`,
+          );
+        }
+
+        return mission;
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          `On-chain mission ${dto.onChainId} is already attached`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async attachMission(
+    missionId: string,
+    ownerAddress: string,
+    dto: AttachMissionDto,
+  ): Promise<Prisma.MissionGetPayload<null>> {
+    const mission = await this.prisma.mission.findUnique({
+      where: { id: missionId },
+    });
+
+    if (!mission) {
+      throw new NotFoundException(`Mission ${missionId} not found`);
+    }
+
+    if (mission.ownerAddress !== ownerAddress) {
+      throw new ForbiddenException(
+        'You are not authorized to attach this mission',
+      );
+    }
+
+    const linkedMission = await this.prisma.mission.findUnique({
+      where: { onChainId: dto.onChainId },
+    });
+
+    if (linkedMission && linkedMission.id !== missionId) {
+      throw new ConflictException(
+        `On-chain mission ${dto.onChainId} is already attached`,
+      );
+    }
+
+    try {
+      return await this.prisma.mission.update({
+        where: { id: missionId },
+        data: { onChainId: dto.onChainId },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          `On-chain mission ${dto.onChainId} is already attached`,
+        );
+      }
+      throw error;
+    }
   }
 
   async getMissionSubmissions(
@@ -224,14 +370,16 @@ export class MissionsService {
 
     const submission = await this.prisma.submission.findUnique({
       where: { id: submissionId },
-      select: { id: true, missionId: true, status: true },
+      select: { id: true, missionId: true, hunterAddress: true, status: true },
     });
 
     if (!submission || submission.missionId !== missionId) {
       throw new NotFoundException(`Submission ${submissionId} not found`);
     }
 
-    if (submission.status !== SubmissionStatus.PENDING) {
+    // Shared with the indexer path so review and chain transitions stay
+    // consistent with the quid-store enum (#310).
+    if (!canTransition(submission.status, status, 'review')) {
       throw new ConflictException(
         `Submission ${submissionId} cannot transition from ${submission.status} to ${status}`,
       );
@@ -255,6 +403,17 @@ export class MissionsService {
     if (result.count !== 1) {
       throw new ConflictException(
         `Submission ${submissionId} is no longer pending`,
+      );
+    }
+
+    // Issue #314: a rejection is the decision a hunter most wants to hear
+    // about, so queue the alert here. `NotificationsService` never throws, and
+    // the review itself is already committed, so a notification problem must
+    // not turn a successful rejection into a 500.
+    if (status === SubmissionStatus.REJECTED) {
+      await this.notifications.notifySubmissionRejected(
+        missionId,
+        submission.hunterAddress,
       );
     }
 

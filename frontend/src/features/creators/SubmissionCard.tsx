@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { Submission } from "@/app/hooks/useQuestData";
 import { useState } from "react";
+import { toast } from "@/context/ToastContext";
 
 export default function SubmissionCard({
   submission,
@@ -120,10 +121,20 @@ export default function SubmissionCard({
               <button
                 type="button"
                 onClick={() =>
-                  setSelectWinner((prev) => ({
-                    ...prev,
-                    [submission.id]: !prev[submission.id],
-                  }))
+                  setSelectWinner((prev) => {
+                    const isNowSelected = !prev[submission.id];
+                    if (isNowSelected) {
+                      toast.success(`Winner selected: ${submission.user}`, {
+                        description: "Marked for winner reward payout.",
+                      });
+                    } else {
+                      toast.info(`Winner deselected: ${submission.user}`);
+                    }
+                    return {
+                      ...prev,
+                      [submission.id]: isNowSelected,
+                    };
+                  })
                 }
                 className={`rounded-full p-1 md:p-2 transition-colors ${
                   isWinnerSelected

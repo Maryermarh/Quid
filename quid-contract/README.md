@@ -14,7 +14,80 @@ Soroban (Rust) smart contracts for Quid: bounty escrow, reputation, milestone pr
 | `quid-badge-nft` | `quid_badge_nft.wasm` | Badge NFTs for completed missions / reputation tiers |
 | `quid-fee-collector` | `quid_fee_collector.wasm` | Protocol fee vault: configurable cut, per-token balances, admin withdrawal |
 | `quid-mission-factory` | `quid_mission_factory.wasm` | Curated mission templates that launch into configured store instances |
+| `quid-moderation-registry` | `quid_moderation_registry.wasm` | Shared ban/mute lists read by store gates (`submit_feedback`) |
 | `hello-world` | `hello_world.wasm` | Scaffold only — safe to ignore |
+
+## Reward tokens (testnet)
+
+`create_mission` takes a `reward_token` that must be the **Stellar Asset Contract
+(SAC) address** of the asset — not the classic `CODE:ISSUER` pair and not the
+issuer address on its own. Passing an issuer or a classic asset makes mission
+creation fail on-chain with `InvalidAsset`.
+
+Use these verified values on **testnet** (`Test SDF Network ; September 2015`):
+
+| Asset | Classic code:issuer | SAC contract id (`reward_token`) | How to get testnet funds |
+|-------|--------------------|------------------------------------|---------------------------|
+| XLM (native) | `native` | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` | Friendbot funds testnet accounts with XLM |
+| USDC | `USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5` | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` | Circle testnet faucet — see below |
+
+The USDC row is the **official Circle-issued** testnet asset. Testnet hosts
+thousands of lookalike `USDC` assets from unverified issuers; using one of those
+will deploy fine and then fail to settle. Always confirm the issuer ends in
+`FLA5`.
+
+### Getting testnet USDC
+
+Friendbot only creates accounts with a native XLM balance, so USDC has to come
+from a faucet. Ask for testnet USDC from the
+[Circle testnet faucet](https://faucet.circle.com/), or from a community faucet,
+then establish a trustline to the issuer:
+
+```bash
+stellar contract invoke \
+  --id CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA \
+  --source alice \
+  --network testnet \
+  --send=yes \
+  -- \
+  changeTrusted \
+  --issuer GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5 \
+  --tlimit 100000
+```
+
+### Native XLM vs SAC wrapping
+
+- **`native` is always available and needs no trustline.** It is the only asset
+  Friendbot funds directly, so use it for local testing and CI.
+- **Any other asset must be passed as its SAC contract id.** Contracts move
+  value through SACs, so `reward_token` for USDC is the `CBIELT...` contract,
+  not `USDC` and not the `GBBD47...` issuer.
+- To resolve a SAC id yourself for an asset on either network:
+
+  ```bash
+  # for a classic asset
+  stellar contract id asset --asset "USDC:GBBD47..." --network testnet
+  # for native XLM
+  stellar contract id asset --asset native --network testnet
+  ```
+
+### Verifying an address before you use it
+
+Any SAC id can be checked against the chain, which is the fastest way to catch a
+typo or a scam asset:
+
+```bash
+stellar contract invoke \
+  --id <SAC_CONTRACT_ID> \
+  --source alice \
+  --network testnet \
+  --send=no \
+  -- \
+  name
+```
+
+A correct USDC SAC prints `"USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"`
+and the native SAC prints `"native"`.
 
 ## Prerequisites
 
@@ -47,6 +120,49 @@ target/wasm32v1-none/release/quid_badge_nft.wasm
 target/wasm32v1-none/release/quid_fee_collector.wasm
 target/wasm32v1-none/release/quid_mission_factory.wasm
 ```
+
+## Deployed on testnet
+
+These are real, verified deployments on `Test SDF Network ; September 2015`.
+Copy the ids into `frontend/.env.example` to point a local frontend at them.
+
+| Contract | Testnet contract id | State |
+|----------|---------------------|-------|
+| `quid-reputation` | `CDXKNUE2ZNZRZLJI5BK6M2KBMLXLAY4ITWTZG6G3BZP2O2AMQKHRCEWC` | Deployed and initialized; `get_admin` verified |
+
+`quid-reputation` was initialized with the deploying account as the initial
+admin. The admin secret is a throwaway Friendbot identity — **do not use this
+contract for anything that needs a trusted admin.** Redeploy with your own
+identity for real use:
+
+```bash
+# redeploy under your own identity
+stellar contract deploy \
+  --wasm target/wasm32v1-none/release/quid_reputation.wasm \
+  --source alice \
+  --network testnet
+
+# then set the admin to your account
+stellar contract invoke \
+  --id <YOUR_REPUTATION_CONTRACT_ID> \
+  --source alice \
+  --network testnet \
+  -- \
+  initialize \
+  --admin <ALICE_PUBLIC_KEY>
+
+# confirm
+stellar contract invoke \
+  --id <YOUR_REPUTATION_CONTRACT_ID> \
+  --source alice \
+  --network testnet \
+  --send=no \
+  -- \
+  get_admin
+```
+
+The other contracts in this workspace have not been deployed to testnet yet;
+use the `## Deploy (testnet)` steps below.
 
 ## Deploy (testnet)
 
@@ -176,6 +292,31 @@ stellar contract invoke \
 - `cancel_mission` / `pause_mission` / `update_mission_status`
 - `slash_hunter_stake` / treasury helpers
 - `set_fee_collector` / `get_fee_collector` — route the protocol fee to `quid-fee-collector`
+- `set_moderation_registry` / `get_moderation_registry` — reject banned/muted hunters in `submit_feedback` via `quid-moderation-registry`
+
+#### Event catalog and schema stability
+
+`quid-store` contract events are part of the backend indexer's integration
+contract. Topics are shown in order; event payload fields are encoded in the
+order shown. Soroban `u64`/`u32`/`i128` values decode as integers and `Address`
+values as Stellar addresses.
+
+| Event name | Topics | Data fields | Emitted by |
+|------------|--------|-------------|------------|
+| `MissionCreateEvent` | `["mission", "create"]` | `mission_id: u64`, `owner: Address`, `title: String`, `description_cid: String`, `reward_token: Address`, `reward_amount: i128`, `max_participants: u32`, `created_at: u64` | `create_mission`, after the mission is stored and any protocol fee is handled |
+| `SubNewEvent` | `["sub", "new"]` | `mission_id: u64`, `hunter: Address`, `ipfs_cid: String` | `submit_feedback`, after the submission and stake are stored |
+| `PayoutDoneEvent` | `["payout", "done"]` | `mission_id: u64`, `hunter: Address` | `payout_participant`, after the reward is paid and submission marked paid |
+| `MissionCancelEvent` | `["mission", "cancel"]` | `mission_id: u64` (single-value data) | `cancel_mission`, after cancellation and refunds |
+| `MissionPauseEvent` | `["mission", "pause"]` | `mission_id: u64` (single-value data) | `pause_mission`, after the mission is paused |
+| `FeeChargedEvent` | `["fee", "charged"]` | `mission_id: u64`, `token: Address`, `amount: i128` | `create_mission`, only when a non-zero protocol fee is charged |
+
+There is currently no rejection event. `update_mission_status` also does not
+emit an event; adding a new event or changing an existing topic, field order,
+field type, or single-value encoding requires a reviewed schema change. Before
+merging such a change, update this catalog, notify backend/indexer owners,
+version and deploy the contract/indexer compatibility change together, and
+cover old and new event handling in tests. Do not silently reuse an existing
+topic with a different payload.
 
 ### `quid-reputation`
 
@@ -197,7 +338,8 @@ See [contracts/quid-referral/README.md](./contracts/quid-referral/README.md).
 ### `quid-milestone-escrow`
 
 - `create_program` / `add_milestone` / `approve_milestone` / `cancel_program`
-- getters for program / milestone status
+- `initialize` / `get_admin` / `set_admin`
+- getters for program / milestone status; `set_program_status` / `set_milestone_status` are admin only
 
 ### `quid-dispute`
 
@@ -255,7 +397,6 @@ cargo test -p quid-mission-factory
 - Store → reputation hook on successful payout (also wires `quid-referral.record_payout`)
 - Store/reputation → `quid-badge-nft` `mint_badge` call on successful payout
   (the badge contract already exposes the minter allow-list for it)
-- Align milestone status helpers with production auth rules
 - Wire `quid-dispute` into store reject / payout holds
 - Remove or archive `hello-world`
 

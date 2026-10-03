@@ -16,18 +16,32 @@ use types::{DataKey, Mission, MissionStatus, Submission, SubmissionStatus};
 pub struct MissionCreateEvent {
     pub mission_id: u64,
     pub owner: Address,
+    pub title: String,
+    pub description_cid: String,
+    pub reward_token: Address,
+    pub reward_amount: i128,
+    pub max_participants: u32,
+    pub created_at: u64,
 }
 
 #[contractevent(topics = ["sub", "new"])]
 pub struct SubNewEvent {
     pub mission_id: u64,
     pub hunter: Address,
+    pub ipfs_cid: String,
 }
 
 #[contractevent(topics = ["payout", "done"])]
 pub struct PayoutDoneEvent {
     pub mission_id: u64,
     pub hunter: Address,
+}
+
+#[contractevent(topics = ["sub", "reject"])]
+pub struct SubmissionRejectedEvent {
+    pub mission_id: u64,
+    pub hunter: Address,
+    pub stake_refunded: i128,
 }
 
 #[contractevent(topics = ["mission", "cancel"], data_format = "single-value")]
@@ -98,6 +112,16 @@ pub trait StakingPool {
         hunter: Address,
         token_address: Address,
     );
+}
+
+/// Subset of `quid-moderation-registry` the store reads (#305).
+///
+/// Declared as a client interface so the store wasm stays free of the
+/// registry's code.
+#[contractclient(name = "ModerationRegistryClient")]
+pub trait ModerationRegistry {
+    /// `false` while `address` is banned or muted.
+    fn can_submit(env: Env, address: Address) -> bool;
 }
 
 #[contract]
@@ -177,13 +201,23 @@ impl QuidStoreContract {
 
             FeeChargedEvent {
                 mission_id,
-                token: mission.reward_token,
+                token: mission.reward_token.clone(),
                 amount: fee,
             }
             .publish(&env);
         }
 
-        MissionCreateEvent { mission_id, owner }.publish(&env);
+        MissionCreateEvent {
+            mission_id,
+            owner,
+            title: mission.title,
+            description_cid: mission.description_cid,
+            reward_token: mission.reward_token,
+            reward_amount: mission.reward_amount,
+            max_participants: mission.max_participants,
+            created_at,
+        }
+        .publish(&env);
 
         Ok(mission_id)
     }
@@ -196,6 +230,18 @@ impl QuidStoreContract {
             .ok_or(QuidError::MissionNotFound)
     }
 
+    /// Get a single hunter submission, including its current review status.
+    pub fn get_submission(
+        env: Env,
+        mission_id: u64,
+        hunter: Address,
+    ) -> Result<Submission, QuidError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Submission(mission_id, hunter))
+            .ok_or(QuidError::SubmissionNotFound)
+    }
+
     /// Submit Feedback
     pub fn submit_feedback(
         env: Env,
@@ -206,6 +252,15 @@ impl QuidStoreContract {
         stake_amount: i128,
     ) -> Result<(), QuidError> {
         hunter.require_auth();
+
+        // Moderation gate (#305): with a registry configured, a banned or
+        // muted hunter is rejected before any stake moves or state changes.
+        // Stores without a registry keep their existing behaviour.
+        if let Some(registry) = Self::moderation_registry(&env) {
+            if !ModerationRegistryClient::new(&env, &registry).can_submit(&hunter) {
+                return Err(QuidError::HunterBanned);
+            }
+        }
 
         let mission = Self::get_mission(env.clone(), mission_id)?;
 
@@ -266,7 +321,12 @@ impl QuidStoreContract {
             .persistent()
             .extend_ttl(&key, 5184000, 5184000);
 
-        SubNewEvent { mission_id, hunter }.publish(&env);
+        SubNewEvent {
+            mission_id,
+            hunter,
+            ipfs_cid: submission.ipfs_cid,
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -300,6 +360,9 @@ impl QuidStoreContract {
 
         if submission.status == SubmissionStatus::Paid {
             return Err(QuidError::AlreadyPaid);
+        }
+        if submission.status == SubmissionStatus::Rejected {
+            return Err(QuidError::AlreadyRejected);
         }
 
         let updated_submission = Submission {
@@ -355,7 +418,7 @@ impl QuidStoreContract {
             mission_id,
             hunter.clone(),
             mission.reward_token.clone(),
-        )?;
+        );
 
         submission.status = SubmissionStatus::Paid;
         env.storage().persistent().set(&key, &submission);
@@ -369,6 +432,59 @@ impl QuidStoreContract {
             .set(&DataKey::Mission(mission_id), &mission);
 
         PayoutDoneEvent { mission_id, hunter }.publish(&env);
+
+        Ok(())
+    }
+
+    /// Reject a pending submission and hand the hunter's stake back.
+    ///
+    /// Owner-only, mirroring `payout_participant`. A rejected submission is
+    /// final: it can neither be updated, paid, nor rejected again, and the slot
+    /// stays free for another hunter. Rejecting is the polite path — the stake
+    /// is returned in full, so use `slash_hunter_stake` for spam.
+    pub fn reject_submission(env: Env, mission_id: u64, hunter: Address) -> Result<(), QuidError> {
+        let mission = Self::get_mission(env.clone(), mission_id)?;
+        mission.owner.require_auth();
+
+        if matches!(
+            mission.status,
+            MissionStatus::Completed | MissionStatus::Cancelled
+        ) {
+            return Err(QuidError::MissionClosed);
+        }
+
+        let key = DataKey::Submission(mission_id, hunter.clone());
+        let mut submission: Submission = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(QuidError::SubmissionNotFound)?;
+
+        if submission.status == SubmissionStatus::Paid {
+            return Err(QuidError::AlreadyPaid);
+        }
+        if submission.status == SubmissionStatus::Rejected {
+            return Err(QuidError::AlreadyRejected);
+        }
+        if submission.status != SubmissionStatus::Pending {
+            return Err(QuidError::NotPending);
+        }
+
+        let stake_refunded =
+            Self::release_stake(&env, mission_id, hunter.clone(), mission.reward_token);
+
+        submission.status = SubmissionStatus::Rejected;
+        env.storage().persistent().set(&key, &submission);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, 5184000, 5184000);
+
+        SubmissionRejectedEvent {
+            mission_id,
+            hunter,
+            stake_refunded,
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -499,6 +615,30 @@ impl QuidStoreContract {
 
     fn staking_pool(env: &Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::StakingPool)
+    }
+
+    /// Point the store at a `quid-moderation-registry` (#305).
+    ///
+    /// Same handover rule as `set_fee_collector`: the first caller must
+    /// authorize as the new registry, and afterwards only the current
+    /// registry can move the slot.
+    pub fn set_moderation_registry(env: Env, new_registry: Address) {
+        if let Some(current) = Self::moderation_registry(&env) {
+            current.require_auth();
+        } else {
+            new_registry.require_auth();
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ModerationRegistry, &new_registry);
+    }
+
+    pub fn get_moderation_registry(env: Env) -> Result<Address, QuidError> {
+        Self::moderation_registry(&env).ok_or(QuidError::ModerationRegistryNotSet)
+    }
+
+    fn moderation_registry(env: &Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::ModerationRegistry)
     }
 
     /// Set the protocol treasury address. Must be called by the treasury itself.
@@ -641,12 +781,10 @@ impl QuidStoreContract {
     }
 
     /// Release a stake lock back to the hunter's available pool balance.
-    fn release_stake(
-        env: &Env,
-        mission_id: u64,
-        hunter: Address,
-        stake_token: Address,
-    ) -> Result<(), QuidError> {
+    ///
+    /// Returns the amount that was unlocked so callers can report it in an
+    /// event. Missing or already-released stakes refund zero.
+    fn release_stake(env: &Env, mission_id: u64, hunter: Address, stake_token: Address) -> i128 {
         let key = DataKey::HunterStake(mission_id, hunter.clone());
 
         if env.storage().persistent().has(&key) {
@@ -657,8 +795,9 @@ impl QuidStoreContract {
                     &hunter,
                     &stake_token,
                 );
+                let unlocked: i128 = env.storage().persistent().get(&key).unwrap_or(0);
                 env.storage().persistent().remove(&key);
-                return Ok(());
+                return unlocked;
             }
         }
 
@@ -670,9 +809,11 @@ impl QuidStoreContract {
             );
 
             env.storage().persistent().remove(&key);
+
+            return amount;
         }
 
-        Ok(())
+        0
     }
 }
 mod test;

@@ -12,6 +12,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { UploadModule } from './upload/upload.module';
 import { IndexerModule } from './indexer/indexer.module';
 import { UsersModule } from './users/users.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -38,6 +39,9 @@ import { UsersModule } from './users/users.module';
     // Issue #327: hunter-facing submissions list (GET /hunter/my-submissions).
     HunterModule,
     UploadModule,
+    // Issue #314: the indexer queues hunter alerts on payout and reject, so
+    // this has to be imported before IndexerModule resolves its dependency.
+    NotificationsModule,
     IndexerModule,
   ],
   controllers: [AppController],

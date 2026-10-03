@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { CalendarDays, ClipboardCheck, RefreshCw } from "lucide-react";
+import { CalendarDays, FileText, RefreshCw } from "lucide-react";
 import { useWallet } from "@/context/WalletProvider";
 import {
   ApiSessionExpiredError,
   apiFetch,
 } from "@/lib/api/client";
 import { PendingBadge } from "@/components/ui/PendingBadge";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SkeletonList } from "@/components/ui/skeleton-list";
 
 /** Issue #327: mirrors the backend Submission + mission include. */
 interface MySubmission {
@@ -185,7 +187,7 @@ export default function MySubmissionsPage() {
       </div>
 
       {state.phase === "loading" ? (
-        <p className="mt-10 text-muted-foreground">Loading your submissions…</p>
+        <SkeletonList count={3} variant="submission" />
       ) : state.phase === "error" ? (
         <div className="mt-10">
           <p className="text-muted-foreground">{state.message}</p>
@@ -198,20 +200,16 @@ export default function MySubmissionsPage() {
           </button>
         </div>
       ) : submissions.length === 0 ? (
-        <div className="mt-16 flex flex-col items-center gap-4 text-center">
-          <ClipboardCheck className="size-10 text-muted-foreground" />
-          <h2 className="text-xl font-semibold">No submissions yet</h2>
-          <p className="max-w-md text-muted-foreground">
-            When you submit feedback on a mission, it will show up here with its
-            review status.
-          </p>
-          <Link
-            href="/hunter/mission-board"
-            className="mt-2 inline-flex items-center rounded-lg bg-[linear-gradient(135deg,#9011FF_0%,#B78CFF_100%)] px-4 py-2 text-sm font-semibold text-foreground shadow-md transition-transform hover:opacity-95 active:scale-[0.98]"
-          >
-            Browse the mission board
-          </Link>
-        </div>
+        <EmptyState
+          title="No submissions yet"
+          description="When you submit feedback on a mission, it will show up here with its review status."
+          icon={FileText}
+          variant="card"
+          action={{
+            label: "Browse Mission Board",
+            href: "/hunter/mission-board",
+          }}
+        />
       ) : (
         <ul className="mt-8 divide-y divide-foreground/20">
           {submissions.map((submission) => (

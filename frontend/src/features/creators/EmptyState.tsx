@@ -1,11 +1,8 @@
 import React from "react";
+import { EmptyState as SharedEmptyState, type EmptyStateProps } from "@/components/ui/empty-state";
 
-const EmptyState = ({ message }: { message: string }) => {
-  return (
-    <div className="text-foreground text-center py-10">
-      <p>{message}</p>
-    </div>
-  );
+export const EmptyState = (props: { message?: string } & Partial<EmptyStateProps>) => {
+  return <SharedEmptyState {...props} />;
 };
 
 export default EmptyState;

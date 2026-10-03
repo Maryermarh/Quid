@@ -20,10 +20,26 @@ enum MissionStatus {
 }
 
 enum SubmissionStatus {
- PENDING
- APPROVED
- REJECTED
- PAID
+  PENDING
+  APPROVED
+  REJECTED
+  PAID
+}
+
+enum NotificationType {
+  SUBMISSION_PAID
+  SUBMISSION_REJECTED
+}
+
+enum NotificationChannelName {
+  IN_APP
+  WEBHOOK
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
 }
 
 model User {
@@ -58,6 +74,8 @@ model Mission {
  participantsCount Int @default(0) @map("participants_count")
  status MissionStatus @default(OPEN) @map("status")
  aiSummary String @map("ai_summary")
+ onChainId String? @unique @map("on_chain_id")
+ indexedFromChain Boolean @default(false) @map("indexed_from_chain")
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -74,6 +92,8 @@ model MissionDraft {
  ownerAddress String @map("owner_address")
  title String @map("title")
  data Json @map("data")
+ publishedAt DateTime? @map("published_at")
+ publishedMissionId String? @unique @map("published_mission_id")
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -92,6 +112,8 @@ model Submission {
  sentiment Float? @map("sentiment")
  status SubmissionStatus @default(PENDING) @map("status")
  rejectionReason String? @map("rejection_reason")
+ txHash String? @unique @map("tx_hash")
+ chainConfirmed Boolean @default(false) @map("chain_confirmed")
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -105,10 +127,49 @@ model Submission {
 }
 
 model IndexerState {
- id Int @id @default(1) @map("id")
- lastLedger BigInt @map("last_ledger")
- lastCursor String? @map("last_cursor")
- updatedAt DateTime @updatedAt @map("updated_at")
+  id Int @id @default(1) @map("id")
+  lastLedger BigInt @map("last_ledger")
+  lastCursor String? @map("last_cursor")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
- @@map("indexer_state")
+  @@map("indexer_state")
+}
+
+/// Issue #314: an alert queued for a hunter, plus one row per channel
+/// describing how the delivery attempt went. Splitting the two keeps a failed
+/// webhook from hiding the alert from the in-app channel, and lets the dispatch
+/// cron retry a single channel without re-sending the others.
+model Notification {
+  id String @id @default(uuid()) @map("id")
+  recipientAddress String @map("recipient_address")
+  type NotificationType @map("type")
+  subject String @map("subject")
+  body String @map("body")
+  payload Json @map("payload")
+  missionId String? @map("mission_id")
+  submissionId String? @map("submission_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  deliveries NotificationDelivery[]
+
+  @@index([recipientAddress, createdAt(sort: Desc)])
+  @@index([missionId])
+  @@map("notifications")
+}
+
+model NotificationDelivery {
+  id String @id @default(uuid()) @map("id")
+  notificationId String @map("notification_id")
+  channel NotificationChannelName @map("channel")
+  status NotificationDeliveryStatus @default(PENDING) @map("status")
+  attempts Int @default(0) @map("attempts")
+  lastError String? @map("last_error")
+  deliveredAt DateTime? @map("delivered_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, channel])
+  @@index([status, createdAt])
+  @@map("notification_deliveries")
 }

@@ -15,3 +15,4 @@ soroban-sdk = { workspace = true }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 quid-fee-collector = { path = "../quid-fee-collector" }
 quid-staking = { path = "../quid-staking" }
+quid-moderation-registry = { path = "../quid-moderation-registry" }

@@ -20,6 +20,8 @@ describe('MissionsController', () => {
     rejectSubmission: jest.Mock;
     saveDraft: jest.Mock;
     getLatestDraft: jest.Mock;
+    publishDraft: jest.Mock;
+    attachMission: jest.Mock;
   };
 
   beforeEach(() => {
@@ -32,6 +34,8 @@ describe('MissionsController', () => {
       rejectSubmission: jest.fn(),
       saveDraft: jest.fn(),
       getLatestDraft: jest.fn(),
+      publishDraft: jest.fn(),
+      attachMission: jest.fn(),
     };
 
     controller = new MissionsController(
@@ -172,6 +176,37 @@ describe('MissionsController', () => {
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const getLatestDraft = MissionsController.prototype.getLatestDraft;
     const guards = Reflect.getMetadata(GUARDS_METADATA, getLatestDraft);
+
+    expect(guards).toContain(JwtAuthGuard);
+  });
+
+  it('publishes a draft for the authenticated owner', async () => {
+    const dto = {
+      onChainId: '42',
+      descriptionCid: 'bafydescription',
+      rewardToken: 'CTOKEN',
+      rewardAmount: '100',
+      maxParticipants: 5,
+    };
+    const mission = { id: 'mission-1', onChainId: '42' };
+    missionsService.publishDraft.mockResolvedValue(mission);
+
+    await expect(
+      controller.publishDraft('draft-1', dto, {
+        user: { userId: 'user-1', address: 'GOWNER' },
+      } as any),
+    ).resolves.toEqual(mission);
+    expect(missionsService.publishDraft).toHaveBeenCalledWith(
+      'draft-1',
+      'GOWNER',
+      dto,
+    );
+  });
+
+  it('requires JWT authentication to publish a draft', () => {
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const publishDraft = MissionsController.prototype.publishDraft;
+    const guards = Reflect.getMetadata(GUARDS_METADATA, publishDraft);
 
     expect(guards).toContain(JwtAuthGuard);
   });

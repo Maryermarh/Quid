@@ -5,6 +5,7 @@ import Image from "next/image";
 import { BriefcaseBusiness, ChevronLeft, ChevronRight, Send } from "lucide-react";
 import SubmitFeedbackModal from "@/components/hunter/SubmitFeedbackModal";
 import { PendingBadge } from "@/components/ui/PendingBadge";
+import { EmptyState } from "@/components/ui/empty-state";
 import { usePendingTx } from "@/app/hooks/usePendingTx";
 import { useWallet } from "@/context/WalletProvider";
 import { getApiBaseUrl } from "@/lib/api-base";
@@ -238,14 +239,41 @@ export default function HunterQuestTabs() {
 
       <div className={showPagination ? "flex min-h-[720px] flex-col" : undefined}>
         <div id={`${activeTab}-panel`} role="tabpanel" className="mt-7 space-y-9 ">
-          {visibleQuests.map((quest) => (
-            <QuestRow
-              key={quest.id}
-              quest={quest}
-              isPending={isPending(quest.id)}
-              onSubmitFeedback={() => setSelectedQuest(quest)}
+          {visibleQuests.length === 0 ? (
+            <EmptyState
+              title={
+                activeTab === "my-quest"
+                  ? "No Active Participations"
+                  : "No Quests Available"
+              }
+              description={
+                activeTab === "my-quest"
+                  ? "You haven't participated in any quests yet. Take a quest from 'For You' or 'All Quest' to start earning."
+                  : "No quests are currently available in this category. Check back later."
+              }
+              variant="card"
+              action={
+                activeTab === "my-quest"
+                  ? {
+                      label: "Browse All Quests",
+                      onClick: () => {
+                        setActiveTab("all-quest");
+                        setAllQuestPage(1);
+                      },
+                    }
+                  : undefined
+              }
             />
-          ))}
+          ) : (
+            visibleQuests.map((quest) => (
+              <QuestRow
+                key={quest.id}
+                quest={quest}
+                isPending={isPending(quest.id)}
+                onSubmitFeedback={() => setSelectedQuest(quest)}
+              />
+            ))
+          )}
         </div>
 
         {showPagination ? (

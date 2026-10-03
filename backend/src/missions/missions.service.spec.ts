@@ -7,6 +7,7 @@ import {
 import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { MissionsService } from './missions.service';
 import { MissionListSort } from './dto/list-missions-query.dto';
 import { MissionStatus, SubmissionStatus } from '@prisma/client';
@@ -23,6 +24,10 @@ const detailInclude = {
 
 describe('MissionsService', () => {
   let service: MissionsService;
+  let notifications: {
+    notifySubmissionPaid: jest.Mock;
+    notifySubmissionRejected: jest.Mock;
+  };
   let prisma: {
     mission: { findMany: jest.Mock; findUnique: jest.Mock };
     submission: {
@@ -57,7 +62,15 @@ describe('MissionsService', () => {
       },
     };
 
-    service = new MissionsService(prisma as unknown as PrismaService);
+    notifications = {
+      notifySubmissionPaid: jest.fn().mockResolvedValue('notification-1'),
+      notifySubmissionRejected: jest.fn().mockResolvedValue('notification-1'),
+    };
+
+    service = new MissionsService(
+      prisma as unknown as PrismaService,
+      notifications as unknown as NotificationsService,
+    );
   });
 
   describe('listPublicMissions', () => {
@@ -266,6 +279,7 @@ describe('MissionsService', () => {
         .mockResolvedValueOnce({
           id: 'sub-1',
           missionId: 'mission-1',
+          hunterAddress: '0xhunter',
           status: SubmissionStatus.PENDING,
         })
         .mockResolvedValueOnce({
@@ -289,6 +303,44 @@ describe('MissionsService', () => {
           },
         }),
       );
+    });
+
+    it('queues a rejection alert for the hunter (issue #314)', async () => {
+      prisma.submission.findUnique
+        .mockReset()
+        .mockResolvedValueOnce({
+          id: 'sub-1',
+          missionId: 'mission-1',
+          hunterAddress: '0xhunter',
+          status: SubmissionStatus.PENDING,
+        })
+        .mockResolvedValueOnce({
+          id: 'sub-1',
+          status: SubmissionStatus.REJECTED,
+          rejectionReason: 'Spam',
+        });
+
+      await service.rejectSubmission('mission-1', 'sub-1', '0xowner', 'Spam');
+
+      expect(notifications.notifySubmissionRejected).toHaveBeenCalledWith(
+        'mission-1',
+        '0xhunter',
+      );
+    });
+
+    it('does not queue an alert when a submission is approved', async () => {
+      await service.approveSubmission('mission-1', 'sub-1', '0xowner');
+
+      expect(notifications.notifySubmissionRejected).not.toHaveBeenCalled();
+      expect(notifications.notifySubmissionPaid).not.toHaveBeenCalled();
+    });
+
+    it('does not queue an alert when the review is refused', async () => {
+      await expect(
+        service.approveSubmission('mission-1', 'sub-1', '0xother'),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(notifications.notifySubmissionRejected).not.toHaveBeenCalled();
     });
 
     it('returns 403 without changing the submission for a non-owner', async () => {
@@ -349,7 +401,7 @@ describe('MissionsService', () => {
       });
 
       expect(prisma.missionDraft.findFirst).toHaveBeenCalledWith({
-        where: { ownerAddress: '0xabc' },
+        where: { ownerAddress: '0xabc', publishedMissionId: null },
         orderBy: { updatedAt: 'desc' },
       });
       expect(prisma.missionDraft.create).toHaveBeenCalledWith({
@@ -444,7 +496,7 @@ describe('MissionsService', () => {
       });
 
       expect(prisma.missionDraft.findFirst).toHaveBeenCalledWith({
-        where: { ownerAddress: '0xabc' },
+        where: { ownerAddress: '0xabc', publishedMissionId: null },
         orderBy: { updatedAt: 'desc' },
       });
       expect(prisma.missionDraft.update).toHaveBeenCalledWith({
@@ -473,7 +525,7 @@ describe('MissionsService', () => {
         latestDraft,
       );
       expect(prisma.missionDraft.findFirst).toHaveBeenCalledWith({
-        where: { ownerAddress: '0xabc' },
+        where: { ownerAddress: '0xabc', publishedMissionId: null },
         orderBy: { updatedAt: 'desc' },
       });
     });

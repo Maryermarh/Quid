@@ -1,19 +1,16 @@
-import Link from "next/link";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Plus } from "lucide-react";
 
 export default function EmptyActiveQuests() {
   return (
-    <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
-      <h2 className="text-lg font-semibold text-foreground">No Active Quest</h2>
-      <p className="max-w-xs text-sm text-muted-foreground">
-        You have no active quest at the moment, click the button below to
-        create a quest.
-      </p>
-      <Link
-        href="/creator/quests/new"
-        className="mt-2  bg-[#8B5CF6] px-5 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-[#7c0de0]"
-      >
-        + Add new Quest
-      </Link>
-    </div>
+    <EmptyState
+      title="No Active Quests"
+      description="You have no active quests at the moment. Click below to create a quest."
+      action={{
+        label: "Add New Quest",
+        href: "/creator/quests/new",
+        icon: Plus,
+      }}
+    />
   );
 }

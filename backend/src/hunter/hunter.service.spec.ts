@@ -60,7 +60,8 @@ describe('HunterService', () => {
 
     expect(prisma.submission.findMany).toHaveBeenCalledWith({
       where: {
-        hunterAddress: 'GHUNTER1111111111111111111111111111111111111111111111111',
+        hunterAddress:
+          'GHUNTER1111111111111111111111111111111111111111111111111',
       },
       orderBy: { createdAt: 'desc' },
       include: {
